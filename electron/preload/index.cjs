@@ -20,6 +20,8 @@ const api = {
   openProfile: (profileId) => ipcRenderer.invoke("profiles:open", profileId),
   stopProfile: (profileId) => ipcRenderer.invoke("profiles:stop", profileId),
   generateLauncher: (profileId) => ipcRenderer.invoke("profiles:generate-launcher", profileId),
+  migrateProfileStorage: (profileId, targetRoot) =>
+    ipcRenderer.invoke("profiles:migrate-storage", { profileId, targetRoot }),
   syncProfileResources: (input) => ipcRenderer.invoke("profiles:sync-resources", input),
   listConfigBackups: (profileId) => ipcRenderer.invoke("profiles:backups", profileId),
   restoreConfigBackup: (input) => ipcRenderer.invoke("profiles:restore-backup", input),

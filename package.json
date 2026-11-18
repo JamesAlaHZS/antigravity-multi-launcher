@@ -1,7 +1,7 @@
 {
   "name": "antigravity-multi-launcher",
   "productName": "Antigravity Multi Launcher",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": false,
   "license": "MIT",
   "description": "Multi-instance profile launcher and isolation manager for Google Antigravity (2.0 / IDE) and OpenAI Codex Desktop on Windows & macOS.",
@@ -20,7 +20,7 @@
     "build:electron": "tsc -p tsconfig.electron.json && node scripts/copy-preload.mjs",
     "build": "npm run build:icons && npm run build:renderer && npm run build:electron",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --pool=threads --maxWorkers=2",
     "start": "npm run build && electron .",
     "dist:win": "npm run build && electron-builder --win --x64",
     "dist:mac": "npm run build && electron-builder --mac",

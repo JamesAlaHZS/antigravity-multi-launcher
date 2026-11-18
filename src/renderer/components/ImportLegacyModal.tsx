@@ -16,9 +16,11 @@ export const ImportLegacyModal: React.FC<ImportLegacyModalProps> = ({
   onImport,
   onClose
 }) => {
-  const importable = candidates.filter((c) => !c.alreadyImported);
+  const defaultChecked = candidates.filter(
+    (c) => !c.alreadyImported && c.legacyStatus === "active"
+  );
   const [selected, setSelected] = useState<Set<string>>(
-    new Set(importable.map((c) => c.id))
+    new Set(defaultChecked.map((c) => c.id))
   );
   const [busy, setBusy] = useState(false);
 
@@ -40,8 +42,8 @@ export const ImportLegacyModal: React.FC<ImportLegacyModalProps> = ({
             <p style={{ margin: "4px 0 0", fontSize: 12.5, color: "var(--text-muted)" }}>
               {t(
                 lang,
-                "无损纳管已有 Codex 多开配置，直接复用原 ~/.codex-profiles 目录与会话状态。",
-                "Import profiles without moving or altering existing ~/.codex-profiles directories."
+                "无损纳管已有 Codex 多开配置与登录状态，导入后还可在配置详情页一键迁移数据目录到 F 盘以释放 C 盘空间。",
+                "Import profiles non-destructively; once imported, you can migrate their storage to another drive in one click."
               )}
             </p>
           </div>
@@ -69,8 +71,23 @@ export const ImportLegacyModal: React.FC<ImportLegacyModalProps> = ({
                     onChange={() => toggle(item.id)}
                   />
                   <div>
-                    <div style={{ fontWeight: 700, fontSize: 13.5 }}>
-                      {item.name} ({item.id})
+                    <div
+                      style={{
+                        fontWeight: 700,
+                        fontSize: 13.5,
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8
+                      }}
+                    >
+                      <span>
+                        {item.name} ({item.id})
+                      </span>
+                      {item.legacyStatus === "deleted" && (
+                        <span className="status-chip warn">
+                          {t(lang, "旧工具已归档", "Archived")}
+                        </span>
+                      )}
                     </div>
                     <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
                       {AUTH_MODE_LABELS[lang][item.authMode]} · {item.model}

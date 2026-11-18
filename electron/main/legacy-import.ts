@@ -9,6 +9,7 @@ import { generateProfileLauncher } from "./launcher.js";
 import { getAppPaths, launcherFileName, resolveCodexApp } from "./paths.js";
 import {
   DEFAULT_ICON_COLORS,
+  getEffectiveStorageRoots,
   getSettings,
   insertImportedProfileRecord,
   listProfiles
@@ -68,7 +69,7 @@ async function loadLegacyRawProfiles(): Promise<LegacyCodexProfileRaw[]> {
     if (await pathExists(candidate)) {
       const parsed = await readJsonFile<{ profiles?: LegacyCodexProfileRaw[] }>(candidate, {});
       if (Array.isArray(parsed.profiles)) {
-        return parsed.profiles.filter((p) => p && p.id && p.status !== "deleted");
+        return parsed.profiles.filter((p) => p && p.id);
       }
     }
   }
@@ -93,6 +94,7 @@ export async function detectLegacyCodexProfiles(): Promise<LegacyCodexProfileCan
     return {
       id: raw.id,
       name: raw.name || raw.id,
+      legacyStatus: raw.status === "deleted" ? "deleted" : "active",
       authMode: mapLegacyAuthMode(raw),
       model: raw.provider?.model || "gpt-5.2",
       providerName: raw.provider?.displayName || "Codex",
@@ -106,32 +108,35 @@ export async function detectLegacyCodexProfiles(): Promise<LegacyCodexProfileCan
 export async function importLegacyCodexProfiles(
   selectedIds?: string[]
 ): Promise<{ importedCount: number }> {
-  const [legacyProfiles, currentProfiles, settings] = await Promise.all([
+  const [legacyProfiles, currentProfiles, settings, roots] = await Promise.all([
     loadLegacyRawProfiles(),
     listProfiles(true),
-    getSettings()
+    getSettings(),
+    getEffectiveStorageRoots()
   ]);
-  const appPaths = getAppPaths();
   const existingIds = new Set(currentProfiles.map((p) => p.id));
   const filterSet = selectedIds?.length ? new Set(selectedIds) : null;
 
   let importedCount = 0;
   for (const raw of legacyProfiles) {
     if (filterSet && !filterSet.has(raw.id)) continue;
+    if (!filterSet && raw.status === "deleted") continue;
     if (existingIds.has(raw.id)) continue;
     if (!raw.paths?.codexHome || !raw.paths?.userDataDir) continue;
 
     const authMode = mapLegacyAuthMode(raw);
     const resolvedCodex = resolveCodexApp(raw.paths.codexAppPath || settings.defaultCodexAppPath);
-    const launcherDir = settings.defaultLauncherRoot || appPaths.defaultLauncherRoot;
-    const launcherPath = path.join(launcherDir, launcherFileName(raw.name || raw.id, "codex"));
+    const launcherPath = path.join(
+      roots.launcherRoot,
+      launcherFileName(raw.name || raw.id, "codex")
+    );
     const now = new Date().toISOString();
 
     const importedRecord: ProfileRecord = {
       id: raw.id,
       name: raw.name || raw.id,
       engine: "codex",
-      status: "active",
+      status: raw.status === "deleted" ? "deleted" : "active",
       paths: {
         appPath: resolvedCodex.appPath,
         profileHome: raw.paths.codexHome,
@@ -163,7 +168,6 @@ export async function importLegacyCodexProfiles(
       }
     };
 
-    // Recover API key from existing auth.json inside codexHome if present
     const authJsonPath = path.join(raw.paths.codexHome, "auth.json");
     if (authMode !== "chatgpt_account" && (await pathExists(authJsonPath))) {
       const authJson = await readJsonFile<{ OPENAI_API_KEY?: string }>(authJsonPath, {});
@@ -173,7 +177,9 @@ export async function importLegacyCodexProfiles(
     }
 
     await insertImportedProfileRecord(importedRecord);
-    await generateProfileLauncher(importedRecord);
+    if (importedRecord.status === "active") {
+      await generateProfileLauncher(importedRecord);
+    }
     existingIds.add(importedRecord.id);
     importedCount += 1;
   }

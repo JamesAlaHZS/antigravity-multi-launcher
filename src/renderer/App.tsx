@@ -108,7 +108,10 @@ export const App: React.FC = () => {
   );
 
   const unimportedLegacyCount = useMemo(
-    () => legacyCandidates.filter((c) => !c.alreadyImported).length,
+    () =>
+      legacyCandidates.filter(
+        (c) => !c.alreadyImported && c.legacyStatus === "active"
+      ).length,
     [legacyCandidates]
   );
 
@@ -195,6 +198,7 @@ export const App: React.FC = () => {
             lang={lang}
             profile={activeProfile}
             allProfiles={profiles}
+            appInfo={appInfo}
             runtime={runtimeMap.get(activeProfile.id)}
             wslDistros={envReport?.wslDistros ?? []}
             onLaunch={handleLaunchProfile}

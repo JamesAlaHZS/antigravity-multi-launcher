@@ -20,6 +20,7 @@ Run multiple isolated **Google Antigravity (2.0 Desktop & Antigravity IDE)** and
 - **One-Click Inheritance & Sync**:
   - Inherit MCP servers, Skills, Plugins, and global rules, or sync conversation history from your default installation or any existing profile.
   - Non-destructively detect and import existing `Codex Profile Manager` profiles in one click.
+  - **Custom Drive Storage & 1-Click Migration**: Store manager data and isolated `.gemini` / `CODEX_HOME` / `user-data` directories on any secondary drive (e.g., `F:\`) to save `C:` drive space, and migrate existing profiles across drives in one click.
 - **Security by Default**:
   - API keys encrypted locally via **AES-256-GCM** (`0600` master key). Diagnostics and launch logs automatically redact sensitive fields.
 

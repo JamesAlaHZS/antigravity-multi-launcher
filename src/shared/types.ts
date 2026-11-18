@@ -192,6 +192,7 @@ export interface ProviderModelsResult {
 export interface LegacyCodexProfileCandidate {
   id: string;
   name: string;
+  legacyStatus: "active" | "deleted";
   authMode: CodexAuthMode;
   model: string;
   providerName: string;
@@ -203,6 +204,8 @@ export interface LegacyCodexProfileCandidate {
 export interface AppSettings {
   language: LanguageCode;
   theme: "light" | "dark";
+  antigravityStorageRoot?: string;
+  codexStorageRoot?: string;
   defaultAntigravityAppPath?: string;
   defaultAntigravityIdePath?: string;
   defaultCodexAppPath?: string;
@@ -248,6 +251,10 @@ export interface MultiLauncherApi {
   openProfile: (profileId: string) => Promise<{ pid: number | null }>;
   stopProfile: (profileId: string) => Promise<{ stoppedPids: number[] }>;
   generateLauncher: (profileId: string) => Promise<{ launcherPath: string }>;
+  migrateProfileStorage: (
+    profileId: string,
+    targetRoot?: string
+  ) => Promise<{ profile: ProfileRecord; targetDir: string }>;
   syncProfileResources: (input: SyncResourcesInput) => Promise<{ copiedItems: string[] }>;
   listConfigBackups: (profileId: string) => Promise<ConfigBackupItem[]>;
   restoreConfigBackup: (input: { profileId: string; backupPath: string }) => Promise<{ ok: boolean }>;

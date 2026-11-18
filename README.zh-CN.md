@@ -15,6 +15,7 @@
   - **Codex**：支持 `ChatGPT 账号独立登录`、`OpenAI 官方 API Key`、`第三方 Responses 兼容接口`。
 - **配置继承与会话同步**：新建配置或运行中可一键同步默认客户端或其他多开窗口的 **MCP 服务、Skills、Plugins、全局规则** 与 **历史对话记录**，并自动挂载本机 `.ssh` 与 `.gitconfig`，确保隔离实例内的 Git / SSH 远程开发开箱即用。
 - **无损迁移已有 Codex 配置**：自动检测本机已有的 `Codex Profile Manager` 配置，一键无损纳管，原目录与历史记录零改动。
+- **自定义存储盘与一键跨盘迁移（节省 C 盘空间）**：支持将管理器元数据、Antigravity 多开目录与 Codex 多开目录统一放置在非系统盘（如 `F:\antigravity\profiles`、`F:\CODEX-MULTI\codex-profiles`），并支持将已导入的历史 C 盘配置一键无损迁移到目标盘。
 
 ## 核心隔离机制对比
 

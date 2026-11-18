@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { FolderOpen, Save, X } from "lucide-react";
+import { FolderOpen, HardDrive, Save, X } from "lucide-react";
 import type { AppInfo, AppSettings, LanguageCode } from "@shared/types";
 import { t } from "../i18n";
 
@@ -20,6 +20,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 }) => {
   const [language, setLanguage] = useState<LanguageCode>(settings.language);
   const [theme, setTheme] = useState<"light" | "dark">(settings.theme);
+  const [agyStorageRoot, setAgyStorageRoot] = useState(settings.antigravityStorageRoot ?? "");
+  const [codexStorageRoot, setCodexStorageRoot] = useState(settings.codexStorageRoot ?? "");
   const [agyPath, setAgyPath] = useState(settings.defaultAntigravityAppPath ?? "");
   const [agyIdePath, setAgyIdePath] = useState(settings.defaultAntigravityIdePath ?? "");
   const [codexPath, setCodexPath] = useState(settings.defaultCodexAppPath ?? "");
@@ -31,10 +33,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         <div className="modal-header">
           <div>
             <h2 style={{ margin: 0, fontSize: 19 }}>
-              {t(lang, "全局设置", "Global Settings")}
+              {t(lang, "全局设置与存储位置", "Global & Storage Settings")}
             </h2>
             <p style={{ margin: "4px 0 0", fontSize: 12.5, color: "var(--text-muted)" }}>
-              {appInfo ? `${appInfo.name} v${appInfo.version} (${appInfo.platform}/${appInfo.arch})` : ""}
+              {appInfo
+                ? `${appInfo.name} v${appInfo.version} (${appInfo.platform}/${appInfo.arch})`
+                : ""}
             </p>
           </div>
           <button className="icon-btn" onClick={onClose}>
@@ -69,23 +73,48 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
             </div>
 
+            {appInfo && (
+              <div className="path-box">
+                <div>
+                  <div style={{ fontWeight: 650, display: "flex", alignItems: "center", gap: 6 }}>
+                    <HardDrive size={14} />
+                    <span>{t(lang, "管理器自身配置与缓存目录", "Manager Data & Cache Root")}</span>
+                  </div>
+                  <div className="mono-text">{appInfo.appDataDir}</div>
+                </div>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => window.multiLauncher.revealPath(appInfo.appDataDir)}
+                >
+                  <FolderOpen size={14} />
+                </button>
+              </div>
+            )}
+
             <div className="field-group">
               <label className="field-label">
-                {t(lang, "默认 Antigravity 2.0 路径 (留空自动检测)", "Default Antigravity 2.0 Path")}
+                {t(
+                  lang,
+                  "Antigravity 多开数据存储目录（含 .gemini 与 user-data，节省 C 盘空间）",
+                  "Antigravity Profiles Storage Root"
+                )}
               </label>
               <div className="input-with-btn">
                 <input
                   className="text-input"
-                  value={agyPath}
-                  placeholder={t(lang, "自动探测", "Auto-detect")}
-                  onChange={(e) => setAgyPath(e.target.value)}
+                  value={agyStorageRoot}
+                  placeholder={appInfo?.antigravityProfileRoot ?? ""}
+                  onChange={(e) => setAgyStorageRoot(e.target.value)}
                 />
                 <button
                   type="button"
                   className="btn"
                   onClick={async () => {
-                    const p = await window.multiLauncher.pickExecutablePath("antigravity");
-                    if (p) setAgyPath(p);
+                    const p = await window.multiLauncher.pickDirectory(
+                      agyStorageRoot || appInfo?.antigravityProfileRoot
+                    );
+                    if (p) setAgyStorageRoot(p);
                   }}
                 >
                   <FolderOpen size={14} />
@@ -95,45 +124,27 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
             <div className="field-group">
               <label className="field-label">
-                {t(lang, "默认 Antigravity IDE 路径 (可选)", "Default Antigravity IDE Path")}
+                {t(
+                  lang,
+                  "Codex 多开数据存储目录（含 codex-home 与 user-data，节省 C 盘空间）",
+                  "Codex Profiles Storage Root"
+                )}
               </label>
               <div className="input-with-btn">
                 <input
                   className="text-input"
-                  value={agyIdePath}
-                  placeholder={t(lang, "自动探测", "Auto-detect")}
-                  onChange={(e) => setAgyIdePath(e.target.value)}
+                  value={codexStorageRoot}
+                  placeholder={appInfo?.codexProfileRoot ?? ""}
+                  onChange={(e) => setCodexStorageRoot(e.target.value)}
                 />
                 <button
                   type="button"
                   className="btn"
                   onClick={async () => {
-                    const p = await window.multiLauncher.pickExecutablePath("antigravity");
-                    if (p) setAgyIdePath(p);
-                  }}
-                >
-                  <FolderOpen size={14} />
-                </button>
-              </div>
-            </div>
-
-            <div className="field-group">
-              <label className="field-label">
-                {t(lang, "默认 Codex 桌面端路径 (留空自动检测)", "Default Codex Desktop Path")}
-              </label>
-              <div className="input-with-btn">
-                <input
-                  className="text-input"
-                  value={codexPath}
-                  placeholder={t(lang, "自动探测 (含 Microsoft Store AppX)", "Auto-detect")}
-                  onChange={(e) => setCodexPath(e.target.value)}
-                />
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={async () => {
-                    const p = await window.multiLauncher.pickExecutablePath("codex");
-                    if (p) setCodexPath(p);
+                    const p = await window.multiLauncher.pickDirectory(
+                      codexStorageRoot || appInfo?.codexProfileRoot
+                    );
+                    if (p) setCodexStorageRoot(p);
                   }}
                 >
                   <FolderOpen size={14} />
@@ -166,6 +177,78 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </button>
               </div>
             </div>
+
+            <div className="field-group">
+              <label className="field-label">
+                {t(lang, "默认 Antigravity 2.0 程序路径", "Default Antigravity 2.0 Path")}
+              </label>
+              <div className="input-with-btn">
+                <input
+                  className="text-input"
+                  value={agyPath}
+                  placeholder={t(lang, "自动探测", "Auto-detect")}
+                  onChange={(e) => setAgyPath(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={async () => {
+                    const p = await window.multiLauncher.pickExecutablePath("antigravity");
+                    if (p) setAgyPath(p);
+                  }}
+                >
+                  <FolderOpen size={14} />
+                </button>
+              </div>
+            </div>
+
+            <div className="field-group">
+              <label className="field-label">
+                {t(lang, "默认 Antigravity IDE 程序路径 (可选)", "Default Antigravity IDE Path")}
+              </label>
+              <div className="input-with-btn">
+                <input
+                  className="text-input"
+                  value={agyIdePath}
+                  placeholder={t(lang, "自动探测", "Auto-detect")}
+                  onChange={(e) => setAgyIdePath(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={async () => {
+                    const p = await window.multiLauncher.pickExecutablePath("antigravity");
+                    if (p) setAgyIdePath(p);
+                  }}
+                >
+                  <FolderOpen size={14} />
+                </button>
+              </div>
+            </div>
+
+            <div className="field-group">
+              <label className="field-label">
+                {t(lang, "默认 Codex 桌面端程序路径", "Default Codex Desktop Path")}
+              </label>
+              <div className="input-with-btn">
+                <input
+                  className="text-input"
+                  value={codexPath}
+                  placeholder={t(lang, "自动探测 (含 Microsoft Store AppX)", "Auto-detect")}
+                  onChange={(e) => setCodexPath(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={async () => {
+                    const p = await window.multiLauncher.pickExecutablePath("codex");
+                    if (p) setCodexPath(p);
+                  }}
+                >
+                  <FolderOpen size={14} />
+                </button>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -179,6 +262,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               await onSave({
                 language,
                 theme,
+                antigravityStorageRoot: agyStorageRoot.trim() || undefined,
+                codexStorageRoot: codexStorageRoot.trim() || undefined,
                 defaultAntigravityAppPath: agyPath.trim() || undefined,
                 defaultAntigravityIdePath: agyIdePath.trim() || undefined,
                 defaultCodexAppPath: codexPath.trim() || undefined,

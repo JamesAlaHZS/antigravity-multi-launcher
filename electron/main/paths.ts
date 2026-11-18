@@ -51,29 +51,87 @@ export function getLocalAppDataDir(home = getRealHomeDir()): string {
   return getRoamingAppDataDir(home);
 }
 
+function resolveDefaultDataRoot(_home: string, roaming: string): string {
+  const dataOverride = process.env.MULTI_LAUNCHER_DATA_DIR?.trim();
+  if (dataOverride) {
+    return path.resolve(dataOverride);
+  }
+  if (process.env.MULTI_LAUNCHER_HOME_OVERRIDE) {
+    return path.join(roaming, APP_NAME);
+  }
+  if (getRuntimePlatform() === "win32") {
+    // Prefer dedicated F:\CODEX-MULTI storage when present to save C: drive space
+    if (fileExistsSync("F:\\CODEX-MULTI")) {
+      return path.join("F:\\CODEX-MULTI", "LauncherData");
+    }
+    // Also support portable data folder beside packaged executable if non-C drive
+    const exeDir = path.dirname(process.execPath);
+    if (!exeDir.toUpperCase().startsWith("C:\\") && fileExistsSync(path.join(exeDir, "portable-data"))) {
+      return path.join(exeDir, "portable-data");
+    }
+  }
+  return path.join(roaming, APP_NAME);
+}
+
+function resolveDefaultAntigravityStorageRoot(home: string): string {
+  if (!process.env.MULTI_LAUNCHER_HOME_OVERRIDE && getRuntimePlatform() === "win32") {
+    if (fileExistsSync("F:\\antigravity")) {
+      return path.join("F:\\antigravity", "profiles");
+    }
+    if (fileExistsSync("F:\\CODEX-MULTI")) {
+      return path.join("F:\\CODEX-MULTI", "antigravity-profiles");
+    }
+  }
+  return path.join(home, ".antigravity-profiles");
+}
+
+function resolveDefaultCodexStorageRoot(home: string): string {
+  if (!process.env.MULTI_LAUNCHER_HOME_OVERRIDE && getRuntimePlatform() === "win32") {
+    if (fileExistsSync("F:\\CODEX-MULTI")) {
+      return path.join("F:\\CODEX-MULTI", "codex-profiles");
+    }
+  }
+  return path.join(home, ".codex-profiles");
+}
+
 export function getAppPaths() {
   const home = getRealHomeDir();
   const roaming = getRoamingAppDataDir(home);
-  const appDataDir = path.join(roaming, APP_NAME);
+  const localAppData = getLocalAppDataDir(home);
+  const appDataDir = resolveDefaultDataRoot(home, roaming);
   const platform = getRuntimePlatform();
+
+  const antigravityProfileRoot = resolveDefaultAntigravityStorageRoot(home);
+  const codexProfileRoot = resolveDefaultCodexStorageRoot(home);
+
+  const isCustomAgyRoot = !antigravityProfileRoot.toLowerCase().startsWith(home.toLowerCase());
+  const isCustomCodexRoot = !codexProfileRoot.toLowerCase().startsWith(home.toLowerCase());
 
   return {
     home,
     roaming,
-    localAppData: getLocalAppDataDir(home),
+    localAppData,
     appDataDir,
     settingsFile: path.join(appDataDir, "settings.json"),
     profilesFile: path.join(appDataDir, "profiles.json"),
     secretsFile: path.join(appDataDir, "secrets.enc.json"),
     masterKeyFile: path.join(appDataDir, "master.key"),
-    antigravityProfileRoot: path.join(home, ".antigravity-profiles"),
-    antigravityUserDataRoot: path.join(roaming, "Antigravity Profiles"),
-    codexProfileRoot: path.join(home, ".codex-profiles"),
-    codexUserDataRoot: path.join(roaming, "Codex Profiles"),
+    antigravityProfileRoot,
+    antigravityUserDataRoot: isCustomAgyRoot
+      ? antigravityProfileRoot
+      : path.join(roaming, "Antigravity Profiles"),
+    codexProfileRoot,
+    codexUserDataRoot: isCustomCodexRoot
+      ? codexProfileRoot
+      : path.join(roaming, "Codex Profiles"),
     defaultLauncherRoot:
-      platform === "win32"
-        ? path.join(home, "Desktop", "AI Profiles")
-        : path.join(home, "Applications", "AI Profiles")
+      !process.env.MULTI_LAUNCHER_HOME_OVERRIDE &&
+      platform === "win32" &&
+      fileExistsSync("F:\\CODEX-MULTI")
+        ? path.join("F:\\CODEX-MULTI", "Launchers")
+        : platform === "win32"
+          ? path.join(home, "Desktop", "AI Profiles")
+          : path.join(home, "Applications", "AI Profiles")
   };
 }
 
@@ -138,8 +196,8 @@ export function resolveAntigravityApp(
 
   if (platform === "win32") {
     candidates.push(
-      path.join(localAppData, "Programs", "antigravity", "Antigravity.exe"),
       "F:\\antigravity\\programs\\antigravity\\Antigravity.exe",
+      path.join(localAppData, "Programs", "antigravity", "Antigravity.exe"),
       process.env.PROGRAMFILES
         ? path.join(process.env.PROGRAMFILES, "Antigravity", "Antigravity.exe")
         : "",

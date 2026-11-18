@@ -46,11 +46,13 @@ import { fetchProviderModels, testProviderConnection } from "./provider-test.js"
 import {
   createProfileRecord,
   findProfile,
+  getEffectiveStorageRoots,
   listProfiles,
   removeProfileRecord,
   restoreProfileRecord,
   softDeleteProfileRecord,
   updateProfileLaunchMetadata,
+  updateProfilePathsRecord,
   updateProfileRecord
 } from "./registry.js";
 import { inspectProfilesRuntime, stopProfileProcesses } from "./runtime.js";
@@ -414,6 +416,82 @@ export async function listSavedProfileModels(input: {
     apiKey,
     model: profile.provider.model
   });
+}
+
+export async function migrateProfileStorage(
+  profileId: string,
+  customTargetRoot?: string
+): Promise<{ profile: ProfileRecord; targetDir: string }> {
+  const profile = await mustFindProfile(profileId);
+  const runtime = await inspectProfilesRuntime([profile]);
+  if (runtime[0]?.status === "running") {
+    throw new Error("该配置实例正在运行中，请先停止该窗口后再执行跨盘迁移。");
+  }
+
+  const roots = await getEffectiveStorageRoots();
+  const baseRoot =
+    customTargetRoot?.trim() ||
+    (profile.engine === "antigravity" ? roots.antigravityRoot : roots.codexRoot);
+
+  const targetContainer = path.join(baseRoot, profile.id);
+  const homeSubdir = profile.engine === "antigravity" ? "home" : "codex-home";
+  const nextHome = path.join(targetContainer, homeSubdir);
+  const nextUserData = path.join(targetContainer, "user-data");
+  const nextExtensions =
+    profile.engine === "antigravity" && profile.antigravityVariant === "antigravity_ide"
+      ? path.join(targetContainer, "extensions")
+      : undefined;
+
+  const oldHome = profile.paths.profileHome;
+  const oldUserData = profile.paths.userDataDir;
+  const oldExtensions = profile.paths.extensionsDir;
+
+  if (
+    path.resolve(oldHome).toLowerCase() === path.resolve(nextHome).toLowerCase() &&
+    path.resolve(oldUserData).toLowerCase() === path.resolve(nextUserData).toLowerCase()
+  ) {
+    return { profile, targetDir: targetContainer };
+  }
+
+  await ensureDir(targetContainer);
+
+  if ((await pathExists(oldHome)) && path.resolve(oldHome) !== path.resolve(nextHome)) {
+    await fs.cp(oldHome, nextHome, { recursive: true, force: true });
+  } else {
+    await ensureDir(nextHome);
+  }
+
+  if ((await pathExists(oldUserData)) && path.resolve(oldUserData) !== path.resolve(nextUserData)) {
+    await fs.cp(oldUserData, nextUserData, { recursive: true, force: true });
+  } else {
+    await ensureDir(nextUserData);
+  }
+
+  if (nextExtensions && oldExtensions && (await pathExists(oldExtensions))) {
+    await fs.cp(oldExtensions, nextExtensions, { recursive: true, force: true });
+  }
+
+  const updated = await updateProfilePathsRecord(profile.id, {
+    profileHome: nextHome,
+    userDataDir: nextUserData,
+    ...(nextExtensions ? { extensionsDir: nextExtensions } : {})
+  });
+  await generateProfileLauncher(updated);
+
+  // Clean up old C: drive directories after verified copy
+  if (path.resolve(oldHome) !== path.resolve(nextHome)) {
+    await fs.rm(oldHome, { recursive: true, force: true }).catch(() => undefined);
+    await fs.rmdir(path.dirname(oldHome)).catch(() => undefined);
+  }
+  if (path.resolve(oldUserData) !== path.resolve(nextUserData)) {
+    await fs.rm(oldUserData, { recursive: true, force: true }).catch(() => undefined);
+    await fs.rmdir(path.dirname(oldUserData)).catch(() => undefined);
+  }
+  if (oldExtensions && nextExtensions && path.resolve(oldExtensions) !== path.resolve(nextExtensions)) {
+    await fs.rm(oldExtensions, { recursive: true, force: true }).catch(() => undefined);
+  }
+
+  return { profile: updated, targetDir: targetContainer };
 }
 
 export async function softDeleteProfile(profileId: string): Promise<{ ok: boolean }> {

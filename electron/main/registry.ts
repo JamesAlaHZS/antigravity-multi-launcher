@@ -2,6 +2,7 @@ import path from "node:path";
 import type {
   AppSettings,
   CreateProfileInput,
+  ProfilePaths,
   ProfileRecord,
   UpdateProfileInput
 } from "../../src/shared/types.js";
@@ -55,6 +56,36 @@ export async function updateSettings(patch: Partial<AppSettings>): Promise<AppSe
   return next;
 }
 
+export async function getEffectiveStorageRoots(): Promise<{
+  antigravityRoot: string;
+  antigravityUserDataRoot: string;
+  codexRoot: string;
+  codexUserDataRoot: string;
+  launcherRoot: string;
+}> {
+  const appPaths = getAppPaths();
+  const settings = await getSettings();
+
+  const customAgy = settings.antigravityStorageRoot?.trim();
+  const customCodex = settings.codexStorageRoot?.trim();
+
+  const antigravityRoot = customAgy || appPaths.antigravityProfileRoot;
+  const antigravityUserDataRoot = customAgy || appPaths.antigravityUserDataRoot;
+
+  const codexRoot = customCodex || appPaths.codexProfileRoot;
+  const codexUserDataRoot = customCodex || appPaths.codexUserDataRoot;
+
+  const launcherRoot = settings.defaultLauncherRoot?.trim() || appPaths.defaultLauncherRoot;
+
+  return {
+    antigravityRoot,
+    antigravityUserDataRoot,
+    codexRoot,
+    codexUserDataRoot,
+    launcherRoot
+  };
+}
+
 export async function loadRegistry(): Promise<RegistryStore> {
   const { profilesFile } = getAppPaths();
   return readJsonFile<RegistryStore>(profilesFile, EMPTY_REGISTRY);
@@ -78,8 +109,8 @@ export async function findProfile(profileId: string): Promise<ProfileRecord | nu
 }
 
 export async function createProfileRecord(input: CreateProfileInput): Promise<ProfileRecord> {
-  const appPaths = getAppPaths();
   const settings = await getSettings();
+  const roots = await getEffectiveStorageRoots();
   const store = await loadRegistry();
 
   const baseSlug = slugifyProfileName(input.name);
@@ -96,22 +127,19 @@ export async function createProfileRecord(input: CreateProfileInput): Promise<Pr
   const variant = isAntigravity ? input.antigravityVariant ?? "antigravity_app" : undefined;
 
   const profileHome = isAntigravity
-    ? path.join(appPaths.antigravityProfileRoot, id, "home")
-    : path.join(appPaths.codexProfileRoot, id, "codex-home");
+    ? path.join(roots.antigravityRoot, id, "home")
+    : path.join(roots.codexRoot, id, "codex-home");
 
   const userDataDir = isAntigravity
-    ? path.join(appPaths.antigravityUserDataRoot, id, "user-data")
-    : path.join(appPaths.codexUserDataRoot, id, "user-data");
+    ? path.join(roots.antigravityUserDataRoot, id, "user-data")
+    : path.join(roots.codexUserDataRoot, id, "user-data");
 
   const extensionsDir =
     isAntigravity && variant === "antigravity_ide"
-      ? path.join(appPaths.antigravityProfileRoot, id, "extensions")
+      ? path.join(roots.antigravityRoot, id, "extensions")
       : undefined;
 
-  const launcherDir =
-    input.launcherDirectory?.trim() ||
-    settings.defaultLauncherRoot?.trim() ||
-    appPaths.defaultLauncherRoot;
+  const launcherDir = input.launcherDirectory?.trim() || roots.launcherRoot;
   const launcherPath = path.join(launcherDir, launcherFileName(input.name, input.engine));
 
   const resolvedApp = isAntigravity
@@ -193,6 +221,27 @@ export async function createProfileRecord(input: CreateProfileInput): Promise<Pr
   store.profiles.push(profile);
   await saveRegistry(store);
   return profile;
+}
+
+export async function updateProfilePathsRecord(
+  profileId: string,
+  newPaths: Partial<ProfilePaths>
+): Promise<ProfileRecord> {
+  const store = await loadRegistry();
+  const profile = store.profiles.find((p) => p.id === profileId);
+  if (!profile) {
+    throw new Error(`Profile not found: ${profileId}`);
+  }
+  profile.paths = {
+    ...profile.paths,
+    ...newPaths
+  };
+  if (newPaths.userDataDir) {
+    profile.launch.lastKnownUserDataDir = newPaths.userDataDir;
+  }
+  profile.timestamps.updatedAt = new Date().toISOString();
+  await saveRegistry(store);
+  return normalizeProfile(profile);
 }
 
 export async function insertImportedProfileRecord(profile: ProfileRecord): Promise<ProfileRecord> {

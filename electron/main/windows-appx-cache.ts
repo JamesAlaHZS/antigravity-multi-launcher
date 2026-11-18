@@ -60,13 +60,14 @@ export async function ensureWindowsAppxDesktopCache(): Promise<CachedWindowsAppx
   }
 
   const nativeFs = getNativeFs();
-  const localAppData = getAppPaths().localAppData;
+  const appPaths = getAppPaths();
   const exeBaseName = path.basename(appx.executablePath);
 
-  // Check both our own cache root and any existing Codex Profile Manager cache root to avoid 300MB duplicate copy
+  // Prefer non-C drive appDataDir\WindowsAppsCache when appDataDir is on F: drive, plus reuse existing cache
   const candidateRoots = [
-    path.join(localAppData, APP_NAME, "WindowsAppsCache"),
-    path.join(localAppData, "Codex Profile Manager", "WindowsAppsCache")
+    path.join(appPaths.appDataDir, "WindowsAppsCache"),
+    path.join(appPaths.localAppData, APP_NAME, "WindowsAppsCache"),
+    path.join(appPaths.localAppData, "Codex Profile Manager", "WindowsAppsCache")
   ];
 
   for (const root of candidateRoots) {

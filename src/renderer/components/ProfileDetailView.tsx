@@ -3,6 +3,7 @@ import {
   ArchiveRestore,
   ExternalLink,
   FolderOpen,
+  HardDrive,
   History,
   Play,
   RefreshCw,
@@ -13,6 +14,7 @@ import {
   Zap
 } from "lucide-react";
 import type {
+  AppInfo,
   ConfigBackupItem,
   LanguageCode,
   ProfileAuthMode,
@@ -27,6 +29,7 @@ interface ProfileDetailViewProps {
   lang: LanguageCode;
   profile: ProfileRecord;
   allProfiles: ProfileRecord[];
+  appInfo: AppInfo | null;
   runtime?: RuntimeStatusItem;
   wslDistros: string[];
   onLaunch: (id: string) => void;
@@ -40,6 +43,7 @@ export const ProfileDetailView: React.FC<ProfileDetailViewProps> = ({
   lang,
   profile,
   allProfiles,
+  appInfo,
   runtime,
   wslDistros,
   onLaunch,
@@ -75,6 +79,22 @@ export const ProfileDetailView: React.FC<ProfileDetailViewProps> = ({
 
   const [backups, setBackups] = useState<ConfigBackupItem[]>([]);
   const [launchLog, setLaunchLog] = useState<string>("");
+  const [migrating, setMigrating] = useState<boolean>(false);
+
+  const preferredStorageRoot =
+    profile.engine === "antigravity"
+      ? appInfo?.antigravityProfileRoot
+      : appInfo?.codexProfileRoot;
+
+  const isOutsidePreferredRoot = Boolean(
+    preferredStorageRoot &&
+      (!profile.paths.profileHome
+        .toLowerCase()
+        .startsWith(preferredStorageRoot.toLowerCase()) ||
+        !profile.paths.userDataDir
+          .toLowerCase()
+          .startsWith(preferredStorageRoot.toLowerCase()))
+  );
 
   useEffect(() => {
     setName(profile.name);
@@ -505,6 +525,61 @@ export const ProfileDetailView: React.FC<ProfileDetailViewProps> = ({
 
       {tab === "paths" && (
         <div>
+          {isOutsidePreferredRoot && preferredStorageRoot && (
+            <div className="banner-card">
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <HardDrive size={18} color="var(--agy-color)" />
+                <div style={{ fontSize: 13 }}>
+                  <strong>
+                    {t(
+                      lang,
+                      "当前该配置的数据仍在原目录（例如 C 盘）",
+                      "Profile data is currently outside target storage root"
+                    )}
+                  </strong>
+                  <div style={{ color: "var(--text-secondary)", marginTop: 2 }}>
+                    {t(
+                      lang,
+                      `在窗口关闭状态下可一键迁移全部会话与登录状态至 ${preferredStorageRoot}\\${profile.id} 并释放原盘空间。`,
+                      `Migrate data to ${preferredStorageRoot}\\${profile.id} when stopped.`
+                    )}
+                  </div>
+                </div>
+              </div>
+              <button
+                className="btn btn-primary"
+                disabled={migrating || isRunning}
+                onClick={async () => {
+                  setMigrating(true);
+                  try {
+                    const res = await window.multiLauncher.migrateProfileStorage(
+                      profile.id,
+                      preferredStorageRoot
+                    );
+                    onUpdated();
+                    onNotify(
+                      t(
+                        lang,
+                        `迁移完成：${res.targetDir}`,
+                        `Migrated to ${res.targetDir}`
+                      )
+                    );
+                  } catch (err) {
+                    onNotify(err instanceof Error ? err.message : String(err));
+                  } finally {
+                    setMigrating(false);
+                  }
+                }}
+              >
+                {migrating
+                  ? t(lang, "正在迁移数据...", "Migrating...")
+                  : isRunning
+                    ? t(lang, "请先停止实例再迁移", "Stop Instance First")
+                    : t(lang, "一键迁移到目标盘", "Migrate Storage")}
+              </button>
+            </div>
+          )}
+
           <div className="surface-card">
             <h3 className="surface-title">{t(lang, "物理隔离目录与凭据域", "Isolated Directories & Scopes")}</h3>
             <p className="surface-desc">

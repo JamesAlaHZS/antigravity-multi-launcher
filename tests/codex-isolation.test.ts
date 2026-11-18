@@ -7,8 +7,8 @@ import {
   detectLegacyCodexProfiles,
   importLegacyCodexProfiles
 } from "../electron/main/legacy-import.js";
-import { createProfile } from "../electron/main/profile-service.js";
-import { listProfiles } from "../electron/main/registry.js";
+import { createProfile, migrateProfileStorage } from "../electron/main/profile-service.js";
+import { listProfiles, updateSettings } from "../electron/main/registry.js";
 import { matchesUserDataDir } from "../electron/main/runtime.js";
 import { getProfileSecret } from "../electron/main/secrets.js";
 
@@ -109,5 +109,20 @@ describe("Codex Isolation & Legacy Profile Import", () => {
     const all = await listProfiles();
     expect(all.some((p) => p.id === "james" && p.paths.profileHome === legacyHome)).toBe(true);
     expect(await getProfileSecret("james")).toBe("sk-legacy-imported");
+
+    // Migrate storage to custom target drive folder and verify old directory is cleaned up
+    const customDriveRoot = path.join(tempHome, "CustomDriveF", "codex-profiles");
+    await updateSettings({ codexStorageRoot: customDriveRoot });
+    const migrated = await migrateProfileStorage("james");
+    expect(migrated.profile.paths.profileHome).toBe(
+      path.join(customDriveRoot, "james", "codex-home")
+    );
+    expect(migrated.profile.paths.userDataDir).toBe(
+      path.join(customDriveRoot, "james", "user-data")
+    );
+    await expect(
+      fs.access(path.join(migrated.profile.paths.profileHome, "auth.json"))
+    ).resolves.toBeUndefined();
+    await expect(fs.access(legacyHome)).rejects.toThrow();
   });
 });

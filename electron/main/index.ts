@@ -15,6 +15,7 @@ import {
   getRuntimeStatus,
   listProfileBackups,
   listSavedProfileModels,
+  migrateProfileStorage,
   openProfile,
   permanentlyDeleteProfile,
   readProfileLaunchLog,
@@ -27,7 +28,13 @@ import {
   updateProfile
 } from "./profile-service.js";
 import { fetchProviderModels, testProviderConnection } from "./provider-test.js";
-import { findProfile, getSettings, listProfiles, updateSettings } from "./registry.js";
+import {
+  findProfile,
+  getEffectiveStorageRoots,
+  getSettings,
+  listProfiles,
+  updateSettings
+} from "./registry.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -94,8 +101,9 @@ async function createMainWindow(): Promise<BrowserWindow> {
 }
 
 function registerIpcHandlers(): void {
-  ipcMain.handle("app:get-info", () => {
+  ipcMain.handle("app:get-info", async () => {
     const paths = getAppPaths();
+    const roots = await getEffectiveStorageRoots();
     return {
       name: APP_NAME,
       version: app.getVersion(),
@@ -103,9 +111,9 @@ function registerIpcHandlers(): void {
       arch: process.arch,
       electronVersion: process.versions.electron,
       appDataDir: paths.appDataDir,
-      defaultLauncherRoot: paths.defaultLauncherRoot,
-      antigravityProfileRoot: paths.antigravityProfileRoot,
-      codexProfileRoot: paths.codexProfileRoot
+      defaultLauncherRoot: roots.launcherRoot,
+      antigravityProfileRoot: roots.antigravityRoot,
+      codexProfileRoot: roots.codexRoot
     };
   });
 
@@ -172,6 +180,11 @@ function registerIpcHandlers(): void {
     if (!profile) throw new Error(`Profile not found: ${id}`);
     return generateProfileLauncher(profile);
   });
+  ipcMain.handle(
+    "profiles:migrate-storage",
+    (_e, input: { profileId: string; targetRoot?: string }) =>
+      migrateProfileStorage(input.profileId, input.targetRoot)
+  );
   ipcMain.handle("profiles:sync-resources", (_e, input) => syncProfileResources(input));
   ipcMain.handle("profiles:backups", (_e, id: string) => listProfileBackups(id));
   ipcMain.handle("profiles:restore-backup", (_e, input) => restoreProfileBackup(input));

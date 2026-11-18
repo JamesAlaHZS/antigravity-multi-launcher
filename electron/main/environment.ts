@@ -9,11 +9,11 @@ import {
   resolveAntigravityIde,
   resolveCodexApp
 } from "./paths.js";
-import { getSettings } from "./registry.js";
+import { getEffectiveStorageRoots, getSettings } from "./registry.js";
 
 export async function getEnvironmentReport(): Promise<EnvironmentReport> {
   const appPaths = getAppPaths();
-  const settings = await getSettings();
+  const [settings, roots] = await Promise.all([getSettings(), getEffectiveStorageRoots()]);
   const platform = getRuntimePlatform();
 
   const agyApp = resolveAntigravityApp(settings.defaultAntigravityAppPath, "antigravity_app");
@@ -40,9 +40,9 @@ export async function getEnvironmentReport(): Promise<EnvironmentReport> {
     findExecutable("codex"),
     findExecutable("node"),
     listWslDistros(),
-    isWritableDirectory(settings.defaultLauncherRoot || appPaths.defaultLauncherRoot),
-    isWritableDirectory(appPaths.antigravityProfileRoot),
-    isWritableDirectory(appPaths.codexProfileRoot),
+    isWritableDirectory(roots.launcherRoot),
+    isWritableDirectory(roots.antigravityRoot),
+    isWritableDirectory(roots.codexRoot),
     isWritableDirectory(appPaths.appDataDir)
   ]);
 
@@ -105,18 +105,18 @@ export async function getEnvironmentReport(): Promise<EnvironmentReport> {
     {
       id: "antigravity-profile-root",
       engine: "antigravity",
-      label: "Antigravity 隔离目录",
+      label: "Antigravity 隔离数据目录",
       importance: "required",
-      path: appPaths.antigravityProfileRoot,
+      path: roots.antigravityRoot,
       status: agyProfileWritable ? "pass" : "fail",
       detail: agyProfileWritable ? "目录可正常读写。" : "目录不可写，请检查磁盘或权限。"
     },
     {
       id: "codex-profile-root",
       engine: "codex",
-      label: "Codex 隔离目录",
+      label: "Codex 隔离数据目录",
       importance: "required",
-      path: appPaths.codexProfileRoot,
+      path: roots.codexRoot,
       status: codexProfileWritable ? "pass" : "fail",
       detail: codexProfileWritable ? "目录可正常读写。" : "目录不可写，请检查磁盘或权限。"
     },
@@ -125,7 +125,7 @@ export async function getEnvironmentReport(): Promise<EnvironmentReport> {
       engine: "system",
       label: "快捷启动器输出目录",
       importance: "required",
-      path: settings.defaultLauncherRoot || appPaths.defaultLauncherRoot,
+      path: roots.launcherRoot,
       status: launcherWritable ? "pass" : "fail",
       detail: launcherWritable ? "启动器目录可正常写入。" : "启动器目录不可写。"
     },
