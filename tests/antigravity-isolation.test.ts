@@ -111,6 +111,7 @@ describe("Antigravity Multi-Instance Isolation Engine", () => {
     expect(spec.env.USERPROFILE).toBe(profile.paths.profileHome);
     expect(spec.env.HOME).toBe(profile.paths.profileHome);
     expect(spec.env.ANTIGRAVITY_CREDENTIAL_SCOPE).toBe("agy-profile-work-account-a");
+    expect(spec.env.SSH_CONNECTION).toBe("127.0.0.1 0 127.0.0.1 22");
     expect(spec.env.APPDATA).toBe(path.join(tempHome, "AppData", "Roaming"));
   });
 

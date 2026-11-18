@@ -23,7 +23,7 @@
 | --- | --- | --- |
 | Electron 实例锁与窗口状态 | 独立 `--user-data-dir`（IDE 额外隔离 `--extensions-dir`） | 独立 `--user-data-dir` + `CODEX_ELECTRON_USER_DATA_PATH` |
 | 核心状态与会话目录 | 独立 `HOME` / `USERPROFILE` + `ANTIGRAVITY_GEMINI_DIR` (`~/.antigravity-profiles/<id>/home/.gemini`) | 独立 `CODEX_HOME` (`~/.codex-profiles/<id>/codex-home`) |
-| 系统钥匙串 / 凭据隔离 | 独立 `ANTIGRAVITY_CREDENTIAL_SCOPE=agy-profile-<id>`（隔离 `gemini:*` 令牌） | 独立 `auth.json` 与 Chromium Profile Cookie 隔离 |
+| 系统钥匙串 / 凭据隔离 | 强制启用独立文件令牌存储（绕过全局 `gemini:antigravity` Windows 凭据管理器 / Keychain 串号）+ 独立 `ANTIGRAVITY_CREDENTIAL_SCOPE` | 独立 `auth.json` 与 Chromium Profile Cookie 隔离 |
 | 开发工具链保持 | 保留真实 `APPDATA` / `LOCALAPPDATA` 并自动关联 `.ssh`、`.gitconfig` | 继承 `AGENTS.md`、`mcp.json`、`skills`、`plugins` |
 | 本地密钥保护 | AES-256-GCM 本地主密钥加密存储，日志与诊断自动脱敏 | AES-256-GCM 本地主密钥加密存储，日志与诊断自动脱敏 |
 

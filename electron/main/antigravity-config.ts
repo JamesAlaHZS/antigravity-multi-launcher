@@ -118,10 +118,22 @@ export async function inheritAntigravityConfigAndSkills(
   await ensureDir(targetConfigDir);
   const copied: string[] = [];
   for (const entry of INHERITED_GEMINI_CONFIG_ENTRIES) {
-    const ok = await copyEntryIfExists(
-      path.join(sourceConfigDir, entry),
-      path.join(targetConfigDir, entry)
-    );
+    const srcPath = path.join(sourceConfigDir, entry);
+    const dstPath = path.join(targetConfigDir, entry);
+    if (entry === "config.json" && (await pathExists(srcPath))) {
+      // Copy user settings & enabled plugins, but strip main-instance sidecar project bindings & remote-control hostname
+      const rawCfg = await readJsonFile<Record<string, unknown>>(srcPath, {});
+      delete rawCfg.sidecars;
+      if (rawCfg.userSettings && typeof rawCfg.userSettings === "object") {
+        const us = { ...(rawCfg.userSettings as Record<string, unknown>) };
+        delete us.remoteControlHostname;
+        rawCfg.userSettings = us;
+      }
+      await writeJsonFile(dstPath, rawCfg);
+      copied.push("config/config.json");
+      continue;
+    }
+    const ok = await copyEntryIfExists(srcPath, dstPath);
     if (ok) {
       copied.push(`config/${entry}`);
     }
@@ -238,6 +250,10 @@ export function buildAntigravityLaunchSpec(
     HOME: profile.paths.profileHome,
     ANTIGRAVITY_GEMINI_DIR: geminiDir,
     ANTIGRAVITY_CREDENTIAL_SCOPE: credentialScope,
+    // Critical: Antigravity's language_server defaults to global OS Keyring (Windows Credential Manager `gemini:antigravity`),
+    // which causes new windows to auto-login to the primary account and share logout state.
+    // Setting SSH_CONNECTION triggers composite_token_storage's file-based token storage inside `<profileHome>/.gemini/antigravity/`!
+    SSH_CONNECTION: "127.0.0.1 0 127.0.0.1 22",
     USER_DATA_DIR: profile.paths.userDataDir
   };
 

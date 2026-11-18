@@ -11,7 +11,7 @@ Run multiple isolated **Google Antigravity (2.0 Desktop & Antigravity IDE)** and
 - **True Multi-Account Antigravity Isolation**:
   - Dedicated `--user-data-dir` (plus `--extensions-dir` for Antigravity IDE).
   - Dedicated `.gemini` directory (`ANTIGRAVITY_GEMINI_DIR` + scoped `HOME`/`USERPROFILE` while preserving real `APPDATA`/`LOCALAPPDATA` and linking `.ssh` & `.gitconfig`).
-  - Dedicated OS Keyring scope via `ANTIGRAVITY_CREDENTIAL_SCOPE=agy-profile-<id>`, preventing Google OAuth logins in one window from overwriting `gemini:antigravity` in Windows Credential Manager or macOS Keychain.
+  - Dedicated per-profile file-based OAuth token storage (bypassing the shared global `gemini:antigravity` OS Keyring entry in Windows Credential Manager / macOS Keychain) + dedicated `ANTIGRAVITY_CREDENTIAL_SCOPE=agy-profile-<id>` for plugin credentials.
 - **Unified Dual-Engine Workspace**:
   - Manage **Antigravity 2.0**, **Antigravity IDE**, and **Codex / ChatGPT Desktop** (including automatic Microsoft Store `WindowsApps` cache extraction on Windows) in one app.
 - **Flexible Auth & Custom Gateways**:

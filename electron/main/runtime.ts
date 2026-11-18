@@ -14,7 +14,7 @@ interface ProcessRow {
 async function listSystemProcesses(): Promise<ProcessRow[]> {
   if (getRuntimePlatform() === "win32") {
     const script =
-      "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'user-data-dir' } | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress";
+      "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'user-data-dir|\\.gemini|profiles' } | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress";
     const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-Command", script], {
       maxBuffer: 8 * 1024 * 1024,
       timeout: 8000
@@ -64,6 +64,19 @@ export function matchesUserDataDir(command: string, userDataDir: string): boolea
   );
 }
 
+export function matchesProfileProcess(command: string, profile: ProfileRecord): boolean {
+  if (matchesUserDataDir(command, profile.paths.userDataDir)) {
+    return true;
+  }
+  const normCmd = command.replace(/\\/g, "/").toLowerCase();
+  const normHome = profile.paths.profileHome.replace(/\\/g, "/").toLowerCase();
+  // Match sidecar or language_server child processes scoped to this profileHome (excluding cmd.exe launcher scripts)
+  if (normHome && normCmd.includes(normHome) && !normCmd.includes("--open-profile=")) {
+    return true;
+  }
+  return false;
+}
+
 function selectPrimaryPid(matches: ProcessRow[]): number | null {
   if (matches.length === 0) return null;
   // Prefer the Electron main process (does NOT carry --type=renderer / --type=gpu-process / --type=utility)
@@ -94,9 +107,7 @@ export async function inspectProfilesRuntime(
   }
 
   return profiles.map((profile) => {
-    const matched = processes.filter((row) =>
-      matchesUserDataDir(row.command, profile.paths.userDataDir)
-    );
+    const matched = processes.filter((row) => matchesProfileProcess(row.command, profile));
     if (matched.length === 0) {
       return {
         profileId: profile.id,
@@ -119,9 +130,7 @@ export async function inspectProfilesRuntime(
 
 export async function stopProfileProcesses(profile: ProfileRecord): Promise<number[]> {
   const processes = await listSystemProcesses();
-  const matched = processes.filter((row) =>
-    matchesUserDataDir(row.command, profile.paths.userDataDir)
-  );
+  const matched = processes.filter((row) => matchesProfileProcess(row.command, profile));
   if (matched.length === 0) {
     return [];
   }
