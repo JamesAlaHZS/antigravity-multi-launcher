@@ -1,0 +1,45 @@
+{
+  "name": "antigravity-multi-launcher",
+  "productName": "Antigravity Multi Launcher",
+  "version": "0.2.0",
+  "private": false,
+  "license": "MIT",
+  "description": "Multi-instance profile launcher and isolation manager for Google Antigravity (2.0 / IDE) and OpenAI Codex Desktop on Windows & macOS.",
+  "author": "JamesAlaHZS",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JamesAlaHZS/antigravity-multi-launcher.git"
+  },
+  "homepage": "https://github.com/JamesAlaHZS/antigravity-multi-launcher",
+  "main": "dist-electron/electron/main/index.js",
+  "type": "module",
+  "scripts": {
+    "dev:renderer": "vite",
+    "build:icons": "node scripts/generate-icons.mjs",
+    "build:renderer": "vite build",
+    "build:electron": "tsc -p tsconfig.electron.json && node scripts/copy-preload.mjs",
+    "build": "npm run build:icons && npm run build:renderer && npm run build:electron",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit",
+    "test": "vitest run",
+    "start": "npm run build && electron .",
+    "dist:win": "npm run build && electron-builder --win --x64",
+    "dist:mac": "npm run build && electron-builder --mac",
+    "dist:dir": "npm run build && electron-builder --dir"
+  },
+  "dependencies": {
+    "lucide-react": "^0.475.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.4",
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.4",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^34.2.0",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.7.3",
+    "vite": "^6.1.1",
+    "vitest": "^3.0.6"
+  }
+}

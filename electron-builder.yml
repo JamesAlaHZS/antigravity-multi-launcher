@@ -1,0 +1,48 @@
+appId: com.jamesalahzs.antigravitymultilauncher
+productName: Antigravity Multi Launcher
+copyright: Copyright © 2026 JamesAlaHZS
+directories:
+  output: release
+  buildResources: assets
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - assets/**/*
+  - package.json
+asar: true
+asarUnpack:
+  - "**/*.node"
+win:
+  icon: assets/icon.png
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Antigravity Multi Launcher
+portable:
+  artifactName: "${productName}-${version}-portable-${arch}.${ext}"
+mac:
+  icon: assets/icon.png
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+    - target: zip
+      arch:
+        - arm64
+        - x64
+linux:
+  icon: assets/icon.png
+  category: Development
+  target:
+    - AppImage

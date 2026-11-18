@@ -1,0 +1,38 @@
+name: 问题反馈 / Bug Report
+description: 反馈 Antigravity 或 Codex 多开启动、隔离或界面问题
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈！请勿在 Issue 中粘贴真实 API Key、OAuth Cookie 或私人对话记录。建议使用应用内的 **「复制脱敏诊断」** 按钮生成环境信息。
+  - type: dropdown
+    id: engine
+    attributes:
+      label: 涉及客户端引擎
+      options:
+        - Google Antigravity 2.0
+        - Google Antigravity IDE
+        - OpenAI Codex / ChatGPT Desktop
+        - 管理器自身 (UI / 启动器)
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: 操作系统与版本
+      placeholder: Windows 11 24H2 / macOS 15.3
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤与报错现象
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: 脱敏诊断报告 (可选)
+      render: json
