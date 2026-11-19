@@ -248,7 +248,7 @@ export interface MultiLauncherApi {
   deleteProfile: (profileId: string) => Promise<{ ok: boolean }>;
   restoreProfile: (profileId: string) => Promise<{ ok: boolean }>;
   permanentlyDeleteProfile: (profileId: string) => Promise<{ ok: boolean }>;
-  openProfile: (profileId: string) => Promise<{ pid: number | null }>;
+  openProfile: (profileId: string) => Promise<{ pid: number | null; focusedExisting?: boolean }>;
   stopProfile: (profileId: string) => Promise<{ stoppedPids: number[] }>;
   generateLauncher: (profileId: string) => Promise<{ launcherPath: string }>;
   migrateProfileStorage: (

@@ -34,6 +34,7 @@ import {
 import { ensureDir, pathExists } from "./fs-utils.js";
 import { generateProfileLauncher, getProfileLogDir } from "./launcher.js";
 import {
+  findWindowsCodexAppxDesktopApp,
   getDefaultCodexHome,
   getDefaultGeminiDir,
   getRuntimePlatform,
@@ -55,9 +56,17 @@ import {
   updateProfilePathsRecord,
   updateProfileRecord
 } from "./registry.js";
-import { inspectProfilesRuntime, stopProfileProcesses } from "./runtime.js";
+import {
+  findRunningProfilePrimaryProcess,
+  inspectProfilesRuntime,
+  stopProfileProcesses
+} from "./runtime.js";
 import { deleteProfileSecret, getProfileSecret, upsertProfileSecret } from "./secrets.js";
 import { ensureWindowsAppxDesktopCache } from "./windows-appx-cache.js";
+import {
+  focusWindowsProcessWindow,
+  restoreWindowsDesktopTaskbarIdentity
+} from "./windows-window-helper.js";
 
 function requiresSecretApiKey(profile: ProfileRecord): boolean {
   return (
@@ -189,7 +198,9 @@ export async function updateProfile(
   };
 }
 
-export async function openProfile(profileId: string): Promise<{ pid: number | null }> {
+export async function openProfile(
+  profileId: string
+): Promise<{ pid: number | null; focusedExisting?: boolean }> {
   const profile = await mustFindProfile(profileId);
   const log = await createLaunchLogger(profile);
 
@@ -208,12 +219,21 @@ export async function openProfile(profileId: string): Promise<{ pid: number | nu
       ? await getProfileSecret(profile.id)
       : null;
 
+    const runningPrimary = await findRunningProfilePrimaryProcess(profile);
+    if (runningPrimary) {
+      await log("detected existing running instance for profile", {
+        existingPid: runningPrimary.pid,
+        existingExecutable: runningPrimary.executablePath
+      });
+    }
+
     let launchSpec: {
       command: string;
       args: string[];
       cwd: string;
       env: NodeJS.ProcessEnv;
     };
+    let codexWindowsAppUserModelId: string | null = null;
 
     if (profile.engine === "antigravity") {
       await prepareAntigravityProfileEnvironment(profile);
@@ -223,36 +243,64 @@ export async function openProfile(profileId: string): Promise<{ pid: number | nu
         profile.paths.appPath,
         profile.antigravityVariant ?? "antigravity_app"
       );
-      if (!(await pathExists(resolved.executablePath))) {
+      let executablePath = resolved.executablePath;
+      if (runningPrimary?.executablePath && (await pathExists(runningPrimary.executablePath))) {
+        executablePath = runningPrimary.executablePath;
+      }
+      if (!(await pathExists(executablePath))) {
         throw new Error(
-          `未找到 Antigravity 可执行文件: ${resolved.executablePath}。请在配置详情或设置中指定正确的安装路径。`
+          `未找到 Antigravity 可执行文件: ${executablePath}。请在配置详情或设置中指定正确的安装路径。`
         );
       }
-      launchSpec = buildAntigravityLaunchSpec(profile, resolved.executablePath, secretKey);
+      launchSpec = buildAntigravityLaunchSpec(profile, executablePath, secretKey);
     } else {
-      await writeCodexConfig(profile, { preserveExtraSections: true });
+      const codexConfigPath = path.join(profile.paths.profileHome, "config.toml");
+      // For ChatGPT account login profiles, preserve any existing config.toml so in-app model switches stay intact
+      if (profile.auth.mode !== "chatgpt_account" || !(await pathExists(codexConfigPath))) {
+        await writeCodexConfig(profile, { preserveExtraSections: true });
+      }
       if (requiresSecretApiKey(profile) && secretKey) {
         await writeCodexAuth(profile, secretKey);
       }
 
-      const resolved = resolveCodexApp(profile.paths.appPath);
-      let executablePath = resolved.executablePath;
+      const installedAppx =
+        getRuntimePlatform() === "win32" ? findWindowsCodexAppxDesktopApp() : null;
+      if (installedAppx) {
+        codexWindowsAppUserModelId = `${installedAppx.packageFamilyName}!${installedAppx.applicationId}`;
+      }
 
+      let executablePath: string;
       if (
-        getRuntimePlatform() === "win32" &&
-        (!(await pathExists(executablePath)) || isWindowsAppsPath(executablePath))
+        runningPrimary?.executablePath &&
+        (await pathExists(runningPrimary.executablePath)) &&
+        !isWindowsAppsPath(runningPrimary.executablePath) &&
+        isWindowsCodexGuiExecutable(runningPrimary.executablePath)
       ) {
-        await log("resolving Windows AppX desktop cache", { requested: executablePath });
-        const cached = await ensureWindowsAppxDesktopCache();
-        if (cached) {
-          executablePath = cached.cachedExecutablePath;
-          await log("using Windows AppX cached binary", { executablePath });
+        // Use the exact same cached ChatGPT.exe binary as the already-running instance so second-instance IPC matches 100%
+        executablePath = runningPrimary.executablePath;
+        await log("reusing running instance binary for second-instance wake", { executablePath });
+      } else {
+        const resolved = resolveCodexApp(profile.paths.appPath);
+        executablePath = resolved.executablePath;
+
+        if (
+          getRuntimePlatform() === "win32" &&
+          (!(await pathExists(executablePath)) ||
+            isWindowsAppsPath(executablePath) ||
+            !isWindowsCodexGuiExecutable(executablePath))
+        ) {
+          await log("resolving Windows AppX desktop cache", { requested: executablePath });
+          const cached = await ensureWindowsAppxDesktopCache();
+          if (cached) {
+            executablePath = cached.cachedExecutablePath;
+            await log("using Windows AppX cached binary", { executablePath });
+          }
         }
       }
 
       if (!(await pathExists(executablePath)) || !isWindowsCodexGuiExecutable(executablePath)) {
         throw new Error(
-          `未找到可用的 Codex 桌面端可执行文件: ${executablePath}。请确认已安装 Codex 桌面端或在设置中指定路径。`
+          `未找到可用的 Codex 桌面端可执行文件: ${executablePath}。请确认已安装 Codex 桌面端（ChatGPT.exe）或在设置中指定路径。`
         );
       }
       launchSpec = buildCodexLaunchSpec(profile, executablePath, secretKey);
@@ -264,7 +312,8 @@ export async function openProfile(profileId: string): Promise<{ pid: number | nu
       args: launchSpec.args,
       cwd: launchSpec.cwd,
       credentialScope: profile.credentialScope,
-      apiKeyInjected: Boolean(secretKey)
+      apiKeyInjected: Boolean(secretKey),
+      wakingExistingPid: runningPrimary?.pid ?? null
     });
 
     const outputLogPath = path.join(getProfileLogDir(profile), "desktop-output.log");
@@ -274,10 +323,15 @@ export async function openProfile(profileId: string): Promise<{ pid: number | nu
       cwd: launchSpec.cwd,
       env: launchSpec.env,
       detached: true,
+      windowsHide: false,
       stdio: ["ignore", outFd, outFd]
     });
 
+    let earlyExit: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+    let spawnErr: Error | null = null;
+
     child.once("error", (err) => {
+      spawnErr = err;
       try {
         nodeFs.closeSync(outFd);
       } catch {
@@ -295,9 +349,66 @@ export async function openProfile(profileId: string): Promise<{ pid: number | nu
       void log("process spawned", { pid: child.pid ?? null });
     });
 
+    child.once("exit", (code, signal) => {
+      earlyExit = { code, signal };
+      void log("spawned process exited", { pid: child.pid ?? null, code, signal });
+    });
+
     child.unref();
-    await updateProfileLaunchMetadata(profile.id, child.pid ?? null);
-    return { pid: child.pid ?? null };
+
+    // Case 1: Waking an already-running instance (e.g. hidden in Windows system tray or behind other windows)
+    if (runningPrimary) {
+      await new Promise((r) => setTimeout(r, 600));
+      if (getRuntimePlatform() === "win32") {
+        const focusRes = await focusWindowsProcessWindow(runningPrimary.pid, 4500);
+        await log("focused existing profile window", { ...focusRes });
+      }
+      await updateProfileLaunchMetadata(profile.id, runningPrimary.pid);
+      return { pid: runningPrimary.pid, focusedExisting: true };
+    }
+
+    // Case 2: Fresh launch — wait briefly to ensure the binary did not immediately die (e.g. broken stub/crash)
+    await new Promise((r) => setTimeout(r, 900));
+    if (spawnErr) {
+      throw spawnErr;
+    }
+    if (earlyExit) {
+      const postCheck = await findRunningProfilePrimaryProcess(profile);
+      if (!postCheck) {
+        const exitInfo = earlyExit as { code: number | null; signal: NodeJS.Signals | null };
+        throw new Error(
+          `隔离窗口进程启动后立即退出 (code=${exitInfo.code}, signal=${exitInfo.signal})。目标程序: ${launchSpec.command}。请检查启动日志排查原因。`
+        );
+      }
+      if (getRuntimePlatform() === "win32") {
+        const focusRes = await focusWindowsProcessWindow(postCheck.pid, 4500);
+        await log("focused newly detected profile window", { ...focusRes });
+      }
+      await updateProfileLaunchMetadata(profile.id, postCheck.pid);
+      return { pid: postCheck.pid };
+    }
+
+    const spawnedPid = child.pid ?? null;
+    await updateProfileLaunchMetadata(profile.id, spawnedPid);
+
+    // Background Windows polish: restore native taskbar icon (AppUserModelId) & ensure window comes to foreground
+    if (getRuntimePlatform() === "win32" && spawnedPid) {
+      void (async () => {
+        if (codexWindowsAppUserModelId) {
+          const identityRes = await restoreWindowsDesktopTaskbarIdentity(
+            spawnedPid,
+            codexWindowsAppUserModelId
+          );
+          if (identityRes) {
+            await log("restored Windows desktop taskbar identity", { ...identityRes });
+          }
+        }
+        const focusRes = await focusWindowsProcessWindow(spawnedPid, 18000);
+        await log("ensured fresh profile window foreground", { ...focusRes });
+      })();
+    }
+
+    return { pid: spawnedPid };
   } catch (err) {
     await log("openProfile failed", {
       error: err instanceof Error ? err.message : String(err)

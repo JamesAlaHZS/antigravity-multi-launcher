@@ -9,12 +9,13 @@ interface ProcessRow {
   pid: number;
   parentPid: number | null;
   command: string;
+  executablePath?: string | null;
 }
 
 async function listSystemProcesses(): Promise<ProcessRow[]> {
   if (getRuntimePlatform() === "win32") {
     const script =
-      "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'user-data-dir|\\.gemini|profiles' } | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress";
+      "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'user-data-dir|\\.gemini|profiles' } | Select-Object ProcessId,ParentProcessId,ExecutablePath,CommandLine | ConvertTo-Json -Compress";
     const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-Command", script], {
       maxBuffer: 8 * 1024 * 1024,
       timeout: 8000
@@ -28,7 +29,8 @@ async function listSystemProcesses(): Promise<ProcessRow[]> {
       .map((r) => ({
         pid: r.ProcessId as number,
         parentPid: typeof r.ParentProcessId === "number" ? r.ParentProcessId : null,
-        command: r.CommandLine as string
+        command: r.CommandLine as string,
+        executablePath: typeof r.ExecutablePath === "string" ? r.ExecutablePath : null
       }));
   }
 
@@ -126,6 +128,25 @@ export async function inspectProfilesRuntime(
       detail: `Active (${matched.length} process${matched.length > 1 ? "es" : ""})`
     };
   });
+}
+
+export async function findRunningProfilePrimaryProcess(
+  profile: ProfileRecord
+): Promise<{ pid: number; executablePath: string | null } | null> {
+  try {
+    const processes = await listSystemProcesses();
+    const matched = processes.filter((row) => matchesProfileProcess(row.command, profile));
+    if (matched.length === 0) return null;
+    const primaryPid = selectPrimaryPid(matched);
+    if (!primaryPid) return null;
+    const primaryRow = matched.find((m) => m.pid === primaryPid) ?? matched[0];
+    return {
+      pid: primaryPid,
+      executablePath: primaryRow.executablePath ?? null
+    };
+  } catch {
+    return null;
+  }
 }
 
 export async function stopProfileProcesses(profile: ProfileRecord): Promise<number[]> {

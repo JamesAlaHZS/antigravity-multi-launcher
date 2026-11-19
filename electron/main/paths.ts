@@ -319,7 +319,11 @@ function checkCandidateBinary(
       return { appPath: candidate, executablePath: candidate, productName };
     }
     if (stat.isDirectory() && platform === "win32") {
-      for (const exeName of [`${productName}.exe`, "Antigravity.exe", "Codex.exe", "ChatGPT.exe"]) {
+      const preferredOrder =
+        productName === "Codex" || productName === "ChatGPT"
+          ? ["ChatGPT.exe", "Codex.exe"]
+          : [`${productName}.exe`, "Antigravity.exe", "ChatGPT.exe", "Codex.exe"];
+      for (const exeName of preferredOrder) {
         const inner = path.join(candidate, exeName);
         if (fileExistsSync(inner)) {
           return { appPath: candidate, executablePath: inner, productName };
@@ -337,6 +341,8 @@ export function isWindowsAppsPath(candidatePath: string): boolean {
   return candidatePath.replace(/\\/g, "/").toLowerCase().includes("/windowsapps/");
 }
 
+const MIN_WINDOWS_CODEX_GUI_EXE_BYTES = 200 * 1024;
+
 export function isWindowsCodexGuiExecutable(candidatePath: string): boolean {
   if (getRuntimePlatform() !== "win32") {
     return true;
@@ -346,7 +352,31 @@ export function isWindowsCodexGuiExecutable(candidatePath: string): boolean {
     return false;
   }
   const normalized = candidatePath.replace(/\\/g, "/").toLowerCase();
-  return !normalized.includes("/resources/") && !normalized.includes("/bin/");
+  if (normalized.includes("/resources/") || normalized.includes("/bin/")) {
+    return false;
+  }
+  // If the file exists on disk, verify it is not a 0-byte Store alias or the ~20KB windows_update_trampoline Codex.exe
+  try {
+    if (fs.existsSync(candidatePath)) {
+      const stat = fs.statSync(candidatePath);
+      if (!stat.isFile() || stat.size < MIN_WINDOWS_CODEX_GUI_EXE_BYTES) {
+        return false;
+      }
+      // Inside OpenAI.Codex packages, app\Codex.exe is a small updater trampoline while app\ChatGPT.exe is the Electron GUI
+      if (base === "codex.exe") {
+        const siblingChatGpt = path.join(path.dirname(candidatePath), "ChatGPT.exe");
+        if (fs.existsSync(siblingChatGpt)) {
+          const siblingStat = fs.statSync(siblingChatGpt);
+          if (siblingStat.isFile() && siblingStat.size >= MIN_WINDOWS_CODEX_GUI_EXE_BYTES) {
+            return false;
+          }
+        }
+      }
+    }
+  } catch {
+    // Allow stat failure on protected WindowsApps paths; resolved later via cache
+  }
+  return true;
 }
 
 export interface WindowsAppxInfo {
@@ -364,8 +394,11 @@ export function findWindowsCodexAppxDesktopApp(): WindowsAppxInfo | null {
     return null;
   }
   try {
+    // IMPORTANT: Always check app\ChatGPT.exe BEFORE app\Codex.exe!
+    // In Microsoft Store OpenAI.Codex packages, app\Codex.exe is a ~20KB windows_update_trampoline stub,
+    // whereas app\ChatGPT.exe (~4.4MB) is the real Electron desktop GUI binary.
     const script =
-      "$packages = @(); foreach ($pattern in 'OpenAI.Codex','OpenAI.ChatGPT','*OpenAI*Codex*','*OpenAI*ChatGPT*') { $packages += Get-AppxPackage -Name $pattern -ErrorAction SilentlyContinue }; $pkg = $packages | Select-Object -First 1; if ($pkg) { [xml]$manifest = Get-Content -Raw (Join-Path $pkg.InstallLocation 'AppxManifest.xml'); $ns = New-Object System.Xml.XmlNamespaceManager($manifest.NameTable); $ns.AddNamespace('f', $manifest.DocumentElement.NamespaceURI); $appId = $manifest.SelectSingleNode('/f:Package/f:Applications/f:Application', $ns).Id; foreach ($name in 'app\\Codex.exe','app\\ChatGPT.exe','Codex.exe','ChatGPT.exe') { $candidate = Join-Path $pkg.InstallLocation $name; if (Test-Path $candidate) { [PSCustomObject]@{ PackageName = $pkg.Name; PackageFullName = $pkg.PackageFullName; PackageFamilyName = $pkg.PackageFamilyName; ApplicationId = $appId; InstallLocation = $pkg.InstallLocation; ExecutablePath = $candidate } | ConvertTo-Json -Compress; break } } }";
+      "$packages = @(); foreach ($pattern in 'OpenAI.Codex','OpenAI.ChatGPT','*OpenAI*Codex*','*OpenAI*ChatGPT*') { $packages += Get-AppxPackage -Name $pattern -ErrorAction SilentlyContinue }; $pkg = $packages | Where-Object { $_.Name -notmatch 'PrimaryRuntime' } | Select-Object -First 1; if ($pkg) { [xml]$manifest = Get-Content -Raw (Join-Path $pkg.InstallLocation 'AppxManifest.xml'); $ns = New-Object System.Xml.XmlNamespaceManager($manifest.NameTable); $ns.AddNamespace('f', $manifest.DocumentElement.NamespaceURI); $appId = $manifest.SelectSingleNode('/f:Package/f:Applications/f:Application', $ns).Id; foreach ($name in 'app\\ChatGPT.exe','ChatGPT.exe','app\\Codex.exe','Codex.exe') { $candidate = Join-Path $pkg.InstallLocation $name; if (Test-Path $candidate) { $len = (Get-Item $candidate -ErrorAction SilentlyContinue).Length; if ($name -match '(?i)Codex\\.exe$' -and $len -gt 0 -and $len -lt 200000) { continue }; [PSCustomObject]@{ PackageName = $pkg.Name; PackageFullName = $pkg.PackageFullName; PackageFamilyName = $pkg.PackageFamilyName; ApplicationId = $appId; InstallLocation = $pkg.InstallLocation; ExecutablePath = $candidate } | ConvertTo-Json -Compress; break } } }";
     const output = execFileSync("powershell.exe", ["-NoProfile", "-Command", script], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
@@ -403,15 +436,26 @@ export function resolveCodexApp(preferredPath?: string): ResolvedAppBinary {
     if (resolved && isWindowsCodexGuiExecutable(resolved.executablePath)) {
       return { ...resolved, source: "preferred" };
     }
+    // If preferredPath pointed to the ~20KB Codex.exe trampoline, automatically repair to sibling ChatGPT.exe
+    if (platform === "win32" && path.basename(candidate).toLowerCase() === "codex.exe") {
+      const siblingChatGpt = path.join(path.dirname(candidate), "ChatGPT.exe");
+      if (fileExistsSync(siblingChatGpt) && isWindowsCodexGuiExecutable(siblingChatGpt)) {
+        return {
+          appPath: siblingChatGpt,
+          executablePath: siblingChatGpt,
+          productName: "ChatGPT",
+          source: "auto-detected"
+        };
+      }
+    }
   }
 
   if (platform === "win32") {
     const winCandidates = [
-      path.join(localAppData, "Programs", "Codex", "Codex.exe"),
       path.join(localAppData, "Programs", "ChatGPT", "ChatGPT.exe"),
-      path.join(localAppData, "Microsoft", "WindowsApps", "Codex.exe"),
-      path.join(localAppData, "Microsoft", "WindowsApps", "ChatGPT.exe"),
-      findRunningProcessExecutable(["Codex", "ChatGPT"]) ?? ""
+      path.join(localAppData, "Programs", "Codex", "ChatGPT.exe"),
+      path.join(localAppData, "Programs", "Codex", "Codex.exe"),
+      findRunningProcessExecutable(["ChatGPT", "Codex"]) ?? ""
     ];
     for (const candidate of winCandidates) {
       if (candidate && fileExistsSync(candidate) && isWindowsCodexGuiExecutable(candidate)) {
@@ -433,7 +477,7 @@ export function resolveCodexApp(preferredPath?: string): ResolvedAppBinary {
       };
     }
   } else if (platform === "darwin") {
-    for (const appBundle of ["/Applications/Codex.app", "/Applications/ChatGPT.app"]) {
+    for (const appBundle of ["/Applications/ChatGPT.app", "/Applications/Codex.app"]) {
       const resolved = checkCandidateBinary(appBundle, "Codex");
       if (resolved) {
         return { ...resolved, source: "auto-detected" };
@@ -442,7 +486,7 @@ export function resolveCodexApp(preferredPath?: string): ResolvedAppBinary {
   }
 
   const fallback =
-    preferredPath?.trim() || (platform === "win32" ? "Codex.exe" : "/Applications/Codex.app");
+    preferredPath?.trim() || (platform === "win32" ? "ChatGPT.exe" : "/Applications/ChatGPT.app");
   return {
     appPath: fallback,
     executablePath: fallback,

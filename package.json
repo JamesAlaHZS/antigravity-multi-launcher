@@ -1,7 +1,7 @@
 {
   "name": "antigravity-multi-launcher",
   "productName": "Antigravity Multi Launcher",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": false,
   "license": "MIT",
   "description": "Multi-instance profile launcher and isolation manager for Google Antigravity (2.0 / IDE) and OpenAI Codex Desktop on Windows & macOS.",

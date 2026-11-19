@@ -7,6 +7,7 @@ import {
   detectLegacyCodexProfiles,
   importLegacyCodexProfiles
 } from "../electron/main/legacy-import.js";
+import { isWindowsCodexGuiExecutable, resolveCodexApp } from "../electron/main/paths.js";
 import { createProfile, migrateProfileStorage } from "../electron/main/profile-service.js";
 import { listProfiles, updateSettings } from "../electron/main/registry.js";
 import { matchesUserDataDir } from "../electron/main/runtime.js";
@@ -124,5 +125,23 @@ describe("Codex Isolation & Legacy Profile Import", () => {
       fs.access(path.join(migrated.profile.paths.profileHome, "auth.json"))
     ).resolves.toBeUndefined();
     await expect(fs.access(legacyHome)).rejects.toThrow();
+  });
+
+  it("rejects the ~20KB Codex.exe updater trampoline and prefers sibling ChatGPT.exe", async () => {
+    const mockAppDir = path.join(tempHome, "MockCodexApp");
+    await fs.mkdir(mockAppDir, { recursive: true });
+    const tinyTrampoline = path.join(mockAppDir, "Codex.exe");
+    const realGuiExe = path.join(mockAppDir, "ChatGPT.exe");
+    await fs.writeFile(tinyTrampoline, Buffer.alloc(20 * 1024, 0x41));
+    await fs.writeFile(realGuiExe, Buffer.alloc(300 * 1024, 0x42));
+
+    expect(isWindowsCodexGuiExecutable(tinyTrampoline)).toBe(false);
+    expect(isWindowsCodexGuiExecutable(realGuiExe)).toBe(true);
+
+    const resolvedFromStub = resolveCodexApp(tinyTrampoline);
+    expect(resolvedFromStub.executablePath).toBe(realGuiExe);
+
+    const resolvedFromDir = resolveCodexApp(mockAppDir);
+    expect(resolvedFromDir.executablePath).toBe(realGuiExe);
   });
 });

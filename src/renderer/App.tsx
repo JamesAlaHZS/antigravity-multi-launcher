@@ -119,16 +119,24 @@ export const App: React.FC = () => {
     try {
       const res = await window.multiLauncher.openProfile(profileId);
       notify(
-        t(
-          lang,
-          `已启动隔离窗口${res.pid ? ` (PID ${res.pid})` : ""}`,
-          `Launched isolated instance${res.pid ? ` (PID ${res.pid})` : ""}`
-        )
+        res.focusedExisting
+          ? t(
+              lang,
+              `已唤起运行中的隔离窗口${res.pid ? ` (PID ${res.pid})` : ""}`,
+              `Focused running instance${res.pid ? ` (PID ${res.pid})` : ""}`
+            )
+          : t(
+              lang,
+              `已启动隔离窗口${res.pid ? ` (PID ${res.pid})` : ""}`,
+              `Launched isolated instance${res.pid ? ` (PID ${res.pid})` : ""}`
+            )
       );
+      const rtNow = await window.multiLauncher.getRuntimeStatus();
+      setRuntimeItems(rtNow);
       setTimeout(async () => {
         const rt = await window.multiLauncher.getRuntimeStatus();
         setRuntimeItems(rt);
-      }, 1500);
+      }, 2000);
     } catch (err) {
       notify(err instanceof Error ? err.message : String(err));
     }
