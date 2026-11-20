@@ -12,6 +12,7 @@ import {
 import { APP_NAME, getAppPaths } from "./paths.js";
 import {
   createProfile,
+  getProfileStats,
   getRuntimeStatus,
   listProfileBackups,
   listSavedProfileModels,
@@ -186,6 +187,7 @@ function registerIpcHandlers(): void {
       migrateProfileStorage(input.profileId, input.targetRoot)
   );
   ipcMain.handle("profiles:sync-resources", (_e, input) => syncProfileResources(input));
+  ipcMain.handle("profiles:stats", (_e, id: string) => getProfileStats(id));
   ipcMain.handle("profiles:backups", (_e, id: string) => listProfileBackups(id));
   ipcMain.handle("profiles:restore-backup", (_e, input) => restoreProfileBackup(input));
   ipcMain.handle("profiles:launch-log", (_e, id: string) => readProfileLaunchLog(id));

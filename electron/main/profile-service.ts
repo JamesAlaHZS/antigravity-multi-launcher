@@ -5,6 +5,7 @@ import path from "node:path";
 import type {
   ConfigBackupItem,
   CreateProfileInput,
+  ProfileConversationStats,
   ProfileRecord,
   ProviderModelsResult,
   ProviderTestResult,
@@ -14,6 +15,8 @@ import type {
 import {
   buildAntigravityLaunchSpec,
   clearAntigravityCredentialScope,
+  countAntigravityConversations,
+  getProfileAntigravityDataSubdirName,
   getProfileGeminiDir,
   inheritAntigravityConfigAndSkills,
   listAntigravityConfigBackups,
@@ -35,8 +38,10 @@ import { ensureDir, pathExists } from "./fs-utils.js";
 import { generateProfileLauncher, getProfileLogDir } from "./launcher.js";
 import {
   findWindowsCodexAppxDesktopApp,
+  getDefaultAntigravityUserDataDir,
   getDefaultCodexHome,
   getDefaultGeminiDir,
+  getRealHomeDir,
   getRuntimePlatform,
   isWindowsAppsPath,
   isWindowsCodexGuiExecutable,
@@ -59,6 +64,7 @@ import {
 import {
   findRunningProfilePrimaryProcess,
   inspectProfilesRuntime,
+  stopOrphanProfileHelpers,
   stopProfileProcesses
 } from "./runtime.js";
 import { deleteProfileSecret, getProfileSecret, upsertProfileSecret } from "./secrets.js";
@@ -110,14 +116,16 @@ export async function createProfile(
       await prepareAntigravityProfileEnvironment(profile, {
         linkDeveloperDotfiles: input.linkDeveloperDotfiles ?? true
       });
-      if (input.inheritDefaultConfig) {
-        await inheritAntigravityConfigAndSkills(profile, getDefaultGeminiDir());
+      if (!profile.useDefaultHome) {
+        if (input.inheritDefaultConfig) {
+          await inheritAntigravityConfigAndSkills(profile, getDefaultGeminiDir());
+        }
+        if (input.syncHistory?.enabled) {
+          const sourceGemini = await resolveAntigravitySourceGeminiDir(input, profile);
+          await syncAntigravityConversations(profile, sourceGemini, "merge");
+        }
+        await writeAntigravityProfileConfig(profile);
       }
-      if (input.syncHistory?.enabled) {
-        const sourceGemini = await resolveAntigravitySourceGeminiDir(input, profile);
-        await syncAntigravityConversations(profile, sourceGemini);
-      }
-      await writeAntigravityProfileConfig(profile);
     } else {
       if (input.inheritDefaultConfig) {
         await inheritDefaultCodexResources(profile, getDefaultCodexHome());
@@ -238,6 +246,29 @@ export async function openProfile(
     if (profile.engine === "antigravity") {
       await prepareAntigravityProfileEnvironment(profile);
       await writeAntigravityProfileConfig(profile);
+
+      if (!profile.useDefaultHome && profile.autoSyncConversationsFrom && !runningPrimary) {
+        try {
+          await stopOrphanProfileHelpers(profile).catch(() => undefined);
+          let sourceGemini = getDefaultGeminiDir();
+          if (profile.autoSyncConversationsFrom !== "default") {
+            const srcProfile = await findProfile(profile.autoSyncConversationsFrom);
+            if (srcProfile && srcProfile.engine === "antigravity" && srcProfile.id !== profile.id) {
+              sourceGemini = getProfileGeminiDir(srcProfile);
+            }
+          }
+          const syncRes = await syncAntigravityConversations(profile, sourceGemini, "merge");
+          await log("auto-synced Antigravity conversations before launch", {
+            from: profile.autoSyncConversationsFrom,
+            syncedConversations: syncRes.syncedConversations,
+            copiedItems: syncRes.copiedItems
+          });
+        } catch (syncErr) {
+          await log("auto-sync conversations warning (continuing launch)", {
+            error: syncErr instanceof Error ? syncErr.message : String(syncErr)
+          });
+        }
+      }
 
       const resolved = resolveAntigravityApp(
         profile.paths.appPath,
@@ -425,11 +456,18 @@ export async function stopProfile(profileId: string): Promise<{ stoppedPids: num
 
 export async function syncProfileResources(
   input: SyncResourcesInput
-): Promise<{ copiedItems: string[] }> {
+): Promise<{ copiedItems: string[]; syncedConversations?: number }> {
   const profile = await mustFindProfile(input.profileId);
   const copiedItems: string[] = [];
+  let syncedConversations: number | undefined;
 
   if (profile.engine === "antigravity") {
+    if (profile.useDefaultHome && input.sourceType === "default") {
+      throw new Error(
+        "该配置已直接关联本机默认 Antigravity 主窗口，实时共享同一份聊天记录，无需手动同步。"
+      );
+    }
+
     let sourceGemini = getDefaultGeminiDir();
     if (input.sourceType === "profile" && input.sourceProfileId) {
       const src = await mustFindProfile(input.sourceProfileId);
@@ -438,11 +476,28 @@ export async function syncProfileResources(
       }
       sourceGemini = getProfileGeminiDir(src);
     }
+
+    if (input.syncConversations) {
+      const runningTarget = await findRunningProfilePrimaryProcess(profile);
+      if (runningTarget) {
+        throw new Error(
+          `目标窗口「${profile.name}」正在运行中 (PID ${runningTarget.pid})，请先关闭该窗口后再同步聊天记录，避免 SQLite 数据库锁定冲突。`
+        );
+      }
+      await stopOrphanProfileHelpers(profile).catch(() => undefined);
+    }
+
     if (input.syncConfigAndSkills) {
       copiedItems.push(...(await inheritAntigravityConfigAndSkills(profile, sourceGemini)));
     }
     if (input.syncConversations) {
-      copiedItems.push(...(await syncAntigravityConversations(profile, sourceGemini)));
+      const convRes = await syncAntigravityConversations(
+        profile,
+        sourceGemini,
+        input.syncMode ?? "merge"
+      );
+      copiedItems.push(...convRes.copiedItems);
+      syncedConversations = convRes.syncedConversations;
     }
   } else {
     let sourceCodex = getDefaultCodexHome();
@@ -461,7 +516,59 @@ export async function syncProfileResources(
     }
   }
 
-  return { copiedItems };
+  return { copiedItems, syncedConversations };
+}
+
+async function countCodexSessions(codexHome: string): Promise<number> {
+  const sessionsDir = path.join(codexHome, "sessions");
+  if (!(await pathExists(sessionsDir))) return 0;
+  let count = 0;
+  async function walk(dir: string): Promise<void> {
+    const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(full);
+      } else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
+        count += 1;
+      }
+    }
+  }
+  await walk(sessionsDir);
+  return count;
+}
+
+export async function getProfileStats(profileId: string): Promise<ProfileConversationStats> {
+  const profile = await mustFindProfile(profileId);
+  if (profile.engine === "antigravity") {
+    const subDirName = getProfileAntigravityDataSubdirName(profile);
+    const effectiveGeminiDir = getProfileGeminiDir(profile);
+    const defaultGeminiDir = getDefaultGeminiDir();
+    const [conversationCount, defaultConversationCount] = await Promise.all([
+      countAntigravityConversations(effectiveGeminiDir, subDirName),
+      countAntigravityConversations(defaultGeminiDir, subDirName)
+    ]);
+    return {
+      profileId: profile.id,
+      conversationCount,
+      defaultConversationCount,
+      effectiveDataDir: path.join(effectiveGeminiDir, subDirName),
+      defaultDataDir: path.join(defaultGeminiDir, subDirName)
+    };
+  }
+
+  const defaultCodex = getDefaultCodexHome();
+  const [conversationCount, defaultConversationCount] = await Promise.all([
+    countCodexSessions(profile.paths.profileHome),
+    countCodexSessions(defaultCodex)
+  ]);
+  return {
+    profileId: profile.id,
+    conversationCount,
+    defaultConversationCount,
+    effectiveDataDir: profile.paths.profileHome,
+    defaultDataDir: defaultCodex
+  };
 }
 
 export async function listProfileBackups(profileId: string): Promise<ConfigBackupItem[]> {
@@ -534,6 +641,9 @@ export async function migrateProfileStorage(
   customTargetRoot?: string
 ): Promise<{ profile: ProfileRecord; targetDir: string }> {
   const profile = await mustFindProfile(profileId);
+  if (profile.useDefaultHome) {
+    throw new Error("该配置已直接关联本机默认主窗口目录，无需执行隔离目录迁移。");
+  }
   const runtime = await inspectProfilesRuntime([profile]);
   if (runtime[0]?.status === "running") {
     throw new Error("该配置实例正在运行中，请先停止该窗口后再执行跨盘迁移。");
@@ -617,24 +727,46 @@ export async function restoreProfile(profileId: string): Promise<{ ok: boolean }
 
 export async function permanentlyDeleteProfile(profileId: string): Promise<{ ok: boolean }> {
   const profile = await mustFindProfile(profileId);
-  await stopProfileProcesses(profile).catch(() => undefined);
+  if (!profile.useDefaultHome) {
+    await stopProfileProcesses(profile).catch(() => undefined);
+  }
   await removeProfileRecord(profileId);
   await deleteProfileSecret(profileId);
 
-  if (profile.engine === "antigravity") {
+  if (profile.engine === "antigravity" && !profile.useDefaultHome) {
     await clearAntigravityCredentialScope(profile.credentialScope);
+  }
+
+  // Never wipe native home / ~/.gemini / default AppData when deleting a default-bound profile
+  const protectedDirs = new Set(
+    [
+      getRealHomeDir(),
+      getDefaultGeminiDir(),
+      getDefaultAntigravityUserDataDir("antigravity_app"),
+      getDefaultAntigravityUserDataDir("antigravity_ide")
+    ].map((d) => path.resolve(d).toLowerCase())
+  );
+
+  const safeRm = async (target: string | undefined) => {
+    if (!target) return;
+    const resolved = path.resolve(target).toLowerCase();
+    if (protectedDirs.has(resolved)) return;
+    await fs.rm(target, { recursive: true, force: true }).catch(() => undefined);
+  };
+
+  if (profile.useDefaultHome) {
+    await safeRm(profile.paths.launcherPath);
+    return { ok: true };
   }
 
   // Delete isolated directories (and parent <root>/<id> container if empty)
   const homeContainer = path.dirname(profile.paths.profileHome);
   const userDataContainer = path.dirname(profile.paths.userDataDir);
   await Promise.all([
-    fs.rm(profile.paths.profileHome, { recursive: true, force: true }),
-    fs.rm(profile.paths.userDataDir, { recursive: true, force: true }),
-    ...(profile.paths.extensionsDir
-      ? [fs.rm(profile.paths.extensionsDir, { recursive: true, force: true })]
-      : []),
-    fs.rm(profile.paths.launcherPath, { recursive: true, force: true })
+    safeRm(profile.paths.profileHome),
+    safeRm(profile.paths.userDataDir),
+    safeRm(profile.paths.extensionsDir),
+    safeRm(profile.paths.launcherPath)
   ]);
   await fs.rmdir(homeContainer).catch(() => undefined);
   await fs.rmdir(userDataContainer).catch(() => undefined);

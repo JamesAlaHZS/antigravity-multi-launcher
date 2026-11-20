@@ -139,6 +139,13 @@ export function getDefaultGeminiDir(): string {
   return path.join(getRealHomeDir(), ".gemini");
 }
 
+export function getDefaultAntigravityUserDataDir(
+  variant: AntigravityVariant = "antigravity_app"
+): string {
+  const roaming = getRoamingAppDataDir(getRealHomeDir());
+  return path.join(roaming, variant === "antigravity_ide" ? "Antigravity IDE" : "Antigravity");
+}
+
 export function getDefaultCodexHome(): string {
   return path.join(getRealHomeDir(), ".codex");
 }

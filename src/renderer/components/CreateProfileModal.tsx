@@ -56,6 +56,7 @@ export const CreateProfileModal: React.FC<CreateProfileModalProps> = ({
     initialEngine === "antigravity" ? "#4F46E5" : "#10B981"
   );
   const [inheritDefaultConfig, setInheritDefaultConfig] = useState<boolean>(true);
+  const [useDefaultHome, setUseDefaultHome] = useState<boolean>(false);
   const [syncHistoryEnabled, setSyncHistoryEnabled] = useState<boolean>(false);
   const [syncSourceProfileId, setSyncSourceProfileId] = useState<string>("default");
 
@@ -161,14 +162,19 @@ export const CreateProfileModal: React.FC<CreateProfileModalProps> = ({
       const payload: CreateProfileInput = {
         name: name.trim(),
         engine,
-        ...(engine === "antigravity" ? { antigravityVariant: variant } : {}),
+        ...(engine === "antigravity"
+          ? {
+              antigravityVariant: variant,
+              useDefaultHome
+            }
+          : {}),
         authMode,
         appPath: customAppPath.trim() || undefined,
         launcherDirectory: customLauncherDir.trim() || undefined,
-        inheritDefaultConfig,
+        inheritDefaultConfig: useDefaultHome ? false : inheritDefaultConfig,
         linkDeveloperDotfiles: true,
         syncHistory: {
-          enabled: syncHistoryEnabled,
+          enabled: useDefaultHome ? false : syncHistoryEnabled,
           scope: "all",
           sources:
             syncSourceProfileId === "default"
@@ -353,72 +359,102 @@ export const CreateProfileModal: React.FC<CreateProfileModalProps> = ({
                 </div>
               </div>
 
-              <div className="toggle-card">
-                <div>
-                  <div style={{ fontWeight: 650, fontSize: 13.5 }}>
-                    {engine === "antigravity"
-                      ? t(lang, "继承默认 Antigravity 配置与技能", "Inherit Default Antigravity Config")
-                      : t(lang, "继承默认 Codex 配置与技能", "Inherit Default Codex Config")}
+              {engine === "antigravity" && (
+                <div className="toggle-card">
+                  <div>
+                    <div style={{ fontWeight: 650, fontSize: 13.5 }}>
+                      {t(
+                        lang,
+                        "关联本机默认 Antigravity 主窗口（主账号实时共享记录）",
+                        "Bind to Native Default Antigravity Window (Live Shared History)"
+                      )}
+                    </div>
+                    <div className="field-hint">
+                      {t(
+                        lang,
+                        "仅适合绑定主力 Google 账号（与直接点击桌面图标共享同一套聊天记录）。新增其他独立 Google 账号请保持关闭。",
+                        "Only enable for your primary Google account to share live history with direct desktop launches. Leave off for additional isolated accounts."
+                      )}
+                    </div>
                   </div>
-                  <div className="field-hint">
-                    {engine === "antigravity"
-                      ? t(
-                          lang,
-                          "自动复制已有 MCP 服务、Skills、Plugins 及全局权限策略，并自动挂载本机 .ssh / .gitconfig。",
-                          "Copy MCP servers, Skills, Plugins & link .ssh/.gitconfig."
-                        )
-                      : t(
-                          lang,
-                          "保留已有 AGENTS.md、MCP 服务、Skills、Plugins 与可信工作区设置。",
-                          "Copy AGENTS.md, MCP servers, Skills & Plugins."
-                        )}
-                  </div>
+                  <input
+                    type="checkbox"
+                    checked={useDefaultHome}
+                    onChange={(e) => setUseDefaultHome(e.target.checked)}
+                  />
                 </div>
-                <input
-                  type="checkbox"
-                  checked={inheritDefaultConfig}
-                  onChange={(e) => setInheritDefaultConfig(e.target.checked)}
-                />
-              </div>
+              )}
 
-              <div className="toggle-card">
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 650, fontSize: 13.5 }}>
-                    {t(lang, "同步历史对话记录", "Sync Conversation History")}
-                  </div>
-                  <div className="field-hint">
-                    {t(
-                      lang,
-                      "从默认客户端或已有多开配置复制历史会话记录到新窗口。",
-                      "Copy conversation history from default app or another profile."
-                    )}
-                  </div>
-                  {syncHistoryEnabled && (
-                    <select
-                      className="select-input"
-                      style={{ marginTop: 8 }}
-                      value={syncSourceProfileId}
-                      onChange={(e) => setSyncSourceProfileId(e.target.value)}
-                    >
-                      <option value="default">
+              {!(engine === "antigravity" && useDefaultHome) && (
+                <>
+                  <div className="toggle-card">
+                    <div>
+                      <div style={{ fontWeight: 650, fontSize: 13.5 }}>
                         {engine === "antigravity"
-                          ? t(lang, "当前默认 Antigravity 客户端", "Default Antigravity App")
-                          : t(lang, "当前默认 Codex 客户端", "Default Codex App")}
-                      </option>
-                      {sameEngineProfiles.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name} ({p.id})
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                </div>
-                <input
-                  type="checkbox"
-                  checked={syncHistoryEnabled}
-                  onChange={(e) => setSyncHistoryEnabled(e.target.checked)}
-                />
-              </div>
+                          ? t(lang, "继承默认 Antigravity 配置与技能", "Inherit Default Antigravity Config")
+                          : t(lang, "继承默认 Codex 配置与技能", "Inherit Default Codex Config")}
+                      </div>
+                      <div className="field-hint">
+                        {engine === "antigravity"
+                          ? t(
+                              lang,
+                              "自动复制已有 MCP 服务、Skills、Plugins 及全局权限策略，并自动挂载本机 .ssh / .gitconfig。",
+                              "Copy MCP servers, Skills, Plugins & link .ssh/.gitconfig."
+                            )
+                          : t(
+                              lang,
+                              "保留已有 AGENTS.md、MCP 服务、Skills、Plugins 与可信工作区设置。",
+                              "Copy AGENTS.md, MCP servers, Skills & Plugins."
+                            )}
+                      </div>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={inheritDefaultConfig}
+                      onChange={(e) => setInheritDefaultConfig(e.target.checked)}
+                    />
+                  </div>
+
+                  <div className="toggle-card">
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 650, fontSize: 13.5 }}>
+                        {t(lang, "同步历史对话记录", "Sync Conversation History")}
+                      </div>
+                      <div className="field-hint">
+                        {t(
+                          lang,
+                          "从默认客户端或已有多开配置复制历史会话记录到新窗口。",
+                          "Copy conversation history from default app or another profile."
+                        )}
+                      </div>
+                      {syncHistoryEnabled && (
+                        <select
+                          className="select-input"
+                          style={{ marginTop: 8 }}
+                          value={syncSourceProfileId}
+                          onChange={(e) => setSyncSourceProfileId(e.target.value)}
+                        >
+                          <option value="default">
+                            {engine === "antigravity"
+                              ? t(lang, "当前默认 Antigravity 客户端", "Default Antigravity App")
+                              : t(lang, "当前默认 Codex 客户端", "Default Codex App")}
+                          </option>
+                          {sameEngineProfiles.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name} ({p.id})
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={syncHistoryEnabled}
+                      onChange={(e) => setSyncHistoryEnabled(e.target.checked)}
+                    />
+                  </div>
+                </>
+              )}
             </div>
           )}
 
@@ -716,16 +752,22 @@ export const CreateProfileModal: React.FC<CreateProfileModalProps> = ({
                 <div className="path-box">
                   <div>
                     <div style={{ fontWeight: 600 }}>
-                      {engine === "antigravity" ? "Isolated .gemini Home" : "Isolated CODEX_HOME"}
+                      {engine === "antigravity"
+                        ? useDefaultHome
+                          ? t(lang, "绑定模式：共享本机默认 ~/.gemini 主目录", "Bound Mode: Native ~/.gemini Home")
+                          : "Isolated .gemini Home"
+                        : "Isolated CODEX_HOME"}
                     </div>
                     <div className="mono-text">
                       {engine === "antigravity"
-                        ? `${appInfo?.antigravityProfileRoot ?? "~/.antigravity-profiles"}/${previewSlug}/home/.gemini`
+                        ? useDefaultHome
+                          ? t(lang, "本机默认 Antigravity 目录 (~/.gemini) · 实时共享聊天记录", "~/.gemini (live shared with default Antigravity)")
+                          : `${appInfo?.antigravityProfileRoot ?? "~/.antigravity-profiles"}/${previewSlug}/home/.gemini`
                         : `${appInfo?.codexProfileRoot ?? "~/.codex-profiles"}/${previewSlug}/codex-home`}
                     </div>
                   </div>
                 </div>
-                {engine === "antigravity" && (
+                {engine === "antigravity" && !useDefaultHome && (
                   <div className="path-box">
                     <div>
                       <div style={{ fontWeight: 600 }}>ANTIGRAVITY_CREDENTIAL_SCOPE</div>

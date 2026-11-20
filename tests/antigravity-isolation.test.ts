@@ -2,14 +2,20 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildAntigravityLaunchSpec } from "../electron/main/antigravity-config.js";
+import {
+  buildAntigravityLaunchSpec,
+  countAntigravityConversations,
+  syncAntigravityConversations
+} from "../electron/main/antigravity-config.js";
 import {
   createProfile,
+  getProfileStats,
   listProfileBackups,
   permanentlyDeleteProfile,
   restoreProfileBackup,
   updateProfile
 } from "../electron/main/profile-service.js";
+import { matchesProfileProcess } from "../electron/main/runtime.js";
 import { getProfileSecret } from "../electron/main/secrets.js";
 
 describe("Antigravity Multi-Instance Isolation Engine", () => {
@@ -162,5 +168,128 @@ describe("Antigravity Multi-Instance Isolation Engine", () => {
     // Permanent delete wipes directories and encrypted secrets
     await permanentlyDeleteProfile(profile.id);
     expect(await getProfileSecret(profile.id)).toBeNull();
+  });
+
+  it("syncs SQLite WAL conversations, brain, annotations, non-sidecar projects, and merges safely", async () => {
+    const defaultGemini = path.join(tempHome, ".gemini");
+    const defaultAgy = path.join(defaultGemini, "antigravity");
+    await fs.mkdir(path.join(defaultAgy, "brain", "conv-a"), { recursive: true });
+    await fs.mkdir(path.join(defaultAgy, "annotations"), { recursive: true });
+    await fs.mkdir(path.join(defaultGemini, "config", "projects"), { recursive: true });
+
+    await fs.writeFile(path.join(defaultAgy, "conversations", "conv-a.db"), "sqlite-a", "utf8");
+    await fs.writeFile(path.join(defaultAgy, "conversations", "conv-a.db-wal"), "wal-a", "utf8");
+    await fs.writeFile(path.join(defaultAgy, "conversations", "conv-a.db-shm"), "shm-a", "utf8");
+    await fs.writeFile(path.join(defaultAgy, "conversation_summaries.db"), "summary-src", "utf8");
+    await fs.writeFile(path.join(defaultAgy, "agyhub_summaries_proto.pb"), "pb-src", "utf8");
+    await fs.writeFile(path.join(defaultAgy, "brain", "conv-a", "note.md"), "# Note A", "utf8");
+    await fs.writeFile(path.join(defaultAgy, "annotations", "a.json"), "{}", "utf8");
+    await fs.writeFile(
+      path.join(defaultGemini, "config", "projects", "outside-of-project.json"),
+      JSON.stringify({ id: "outside-of-project", name: "Outside" }),
+      "utf8"
+    );
+    await fs.writeFile(
+      path.join(defaultGemini, "config", "projects", "sidecar-board.json"),
+      JSON.stringify({ id: "board", sidecar: { sidecarId: "swarm/swarm_board" } }),
+      "utf8"
+    );
+
+    const { profile } = await createProfile({
+      name: "ALA Sync",
+      engine: "antigravity",
+      antigravityVariant: "antigravity_app",
+      authMode: "google_account",
+      inheritDefaultConfig: false,
+      provider: { displayName: "Google Antigravity", model: "gemini-2.5-pro" }
+    });
+
+    // Place a stale -shm on empty target to ensure sync cleans it
+    const targetAgy = path.join(profile.paths.profileHome, ".gemini", "antigravity");
+    await fs.writeFile(path.join(targetAgy, "conversation_summaries.db-shm"), "stale-shm", "utf8");
+
+    const firstSync = await syncAntigravityConversations(profile, defaultGemini, "merge");
+    expect(firstSync.syncedConversations).toBe(2); // conv-1.pb + conv-a.db
+
+    // .db and .db-wal copied, .db-shm skipped, summary copied directly on empty target
+    await expect(fs.access(path.join(targetAgy, "conversations", "conv-a.db"))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(targetAgy, "conversations", "conv-a.db-wal"))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(targetAgy, "conversations", "conv-a.db-shm"))).rejects.toThrow();
+    await expect(fs.access(path.join(targetAgy, "conversation_summaries.db"))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(targetAgy, "conversation_summaries.db-shm"))).rejects.toThrow();
+    await expect(fs.access(path.join(targetAgy, "brain", "conv-a", "note.md"))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(targetAgy, "annotations", "a.json"))).resolves.toBeUndefined();
+    await expect(
+      fs.access(path.join(profile.paths.profileHome, ".gemini", "config", "projects", "outside-of-project.json"))
+    ).resolves.toBeUndefined();
+    await expect(
+      fs.access(path.join(profile.paths.profileHome, ".gemini", "config", "projects", "sidecar-board.json"))
+    ).rejects.toThrow();
+
+    // Now add a unique conversation on target AND a new conversation on source, then merge
+    await fs.writeFile(path.join(targetAgy, "conversations", "target-only.db"), "sqlite-t", "utf8");
+    await fs.writeFile(path.join(defaultAgy, "conversations", "conv-b.db"), "sqlite-b", "utf8");
+
+    const mergeSync = await syncAntigravityConversations(profile, defaultGemini, "merge");
+    expect(mergeSync.syncedConversations).toBe(1); // only conv-b.db
+    // Both target-only.db and conv-b.db exist, and summary DB is cleared for Antigravity reconciliation
+    expect(await countAntigravityConversations(path.join(profile.paths.profileHome, ".gemini"))).toBe(4);
+    await expect(fs.access(path.join(targetAgy, "conversations", "target-only.db"))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(targetAgy, "conversations", "conv-b.db"))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(targetAgy, "conversation_summaries.db"))).rejects.toThrow();
+  });
+
+  it("supports native default Antigravity binding without clobbering or deleting ~/.gemini, and ignores orphan sidecars", async () => {
+    const { profile } = await createProfile({
+      name: "Primary ALA",
+      engine: "antigravity",
+      antigravityVariant: "antigravity_app",
+      useDefaultHome: true,
+      authMode: "google_account",
+      inheritDefaultConfig: false,
+      provider: { displayName: "Google Antigravity", model: "gemini-2.5-pro" }
+    });
+
+    expect(profile.useDefaultHome).toBe(true);
+    const stats = await getProfileStats(profile.id);
+    expect(stats.conversationCount).toBe(1);
+    expect(stats.defaultConversationCount).toBe(1);
+
+    const spec = buildAntigravityLaunchSpec(
+      profile,
+      "C:\\Program Files\\Antigravity\\Antigravity.exe",
+      null
+    );
+    expect(spec.args.some((a) => a.startsWith("--user-data-dir="))).toBe(false);
+    expect(spec.env.ANTIGRAVITY_GEMINI_DIR).toBeUndefined();
+    expect(spec.env.ANTIGRAVITY_CREDENTIAL_SCOPE).toBeUndefined();
+
+    // Process matching: matches default Antigravity, ignores isolated profiles and orphan sidecars
+    expect(
+      matchesProfileProcess('"C:\\Programs\\antigravity\\Antigravity.exe"', profile, {
+        name: "Antigravity.exe",
+        executablePath: "C:\\Programs\\antigravity\\Antigravity.exe"
+      })
+    ).toBe(true);
+    expect(
+      matchesProfileProcess(
+        'C:\\Programs\\antigravity\\Antigravity.exe --user-data-dir=F:\\antigravity\\profiles\\yun\\user-data',
+        profile,
+        { name: "Antigravity.exe" }
+      )
+    ).toBe(false);
+    expect(
+      matchesProfileProcess(
+        '"C:\\Programs\\antigravity\\Antigravity.exe" --import=file:///F:/antigravity/profiles/ala/home/.gemini/antigravity/lib/node_modules/sidecar_sdk/register_loader.js main.mjs',
+        profile,
+        { name: "Antigravity.exe" }
+      )
+    ).toBe(false);
+
+    // Deleting a default-bound profile must NEVER delete ~/.gemini
+    await permanentlyDeleteProfile(profile.id);
+    await expect(
+      fs.access(path.join(tempHome, ".gemini", "antigravity", "conversations", "conv-1.pb"))
+    ).resolves.toBeUndefined();
   });
 });

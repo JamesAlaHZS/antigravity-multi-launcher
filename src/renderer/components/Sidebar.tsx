@@ -166,6 +166,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     {isRunning && <span className="running-dot" title={`PID ${rt?.pid}`} />}
+                    {profile.useDefaultHome && (
+                      <span
+                        className="status-chip pass"
+                        style={{ fontSize: 10, padding: "1px 6px" }}
+                      >
+                        {t(lang, "主窗口", "Native")}
+                      </span>
+                    )}
                     <span className={`engine-badge ${profile.engine}`}>{badgeText}</span>
                   </div>
                 </div>

@@ -36,6 +36,10 @@ export interface ProfileRecord {
   antigravityVariant?: AntigravityVariant;
   status: "active" | "deleted";
   credentialScope?: string;
+  /** Antigravity only: bind directly to native default ~/.gemini & %APPDATA%\Antigravity so direct launch and Multi Launcher share live history & login. */
+  useDefaultHome?: boolean;
+  /** Optional conversation auto-sync source before launching an isolated profile: "default" or another profileId. */
+  autoSyncConversationsFrom?: string;
   paths: ProfilePaths;
   auth: {
     mode: ProfileAuthMode;
@@ -65,6 +69,8 @@ export interface CreateProfileInput {
   name: string;
   engine: EngineType;
   antigravityVariant?: AntigravityVariant;
+  useDefaultHome?: boolean;
+  autoSyncConversationsFrom?: string;
   authMode: ProfileAuthMode;
   appPath?: string;
   launcherDirectory?: string;
@@ -97,6 +103,8 @@ export interface UpdateProfileInput {
   name?: string;
   appPath?: string;
   antigravityVariant?: AntigravityVariant;
+  useDefaultHome?: boolean;
+  autoSyncConversationsFrom?: string;
   authMode?: ProfileAuthMode;
   provider: {
     displayName: string;
@@ -121,6 +129,15 @@ export interface SyncResourcesInput {
   syncConversations: boolean;
   sourceType: "default" | "profile";
   sourceProfileId?: string;
+  syncMode?: "merge" | "replace";
+}
+
+export interface ProfileConversationStats {
+  profileId: string;
+  conversationCount: number;
+  defaultConversationCount: number;
+  effectiveDataDir: string;
+  defaultDataDir: string;
 }
 
 export interface RuntimeStatusItem {
@@ -255,7 +272,11 @@ export interface MultiLauncherApi {
     profileId: string,
     targetRoot?: string
   ) => Promise<{ profile: ProfileRecord; targetDir: string }>;
-  syncProfileResources: (input: SyncResourcesInput) => Promise<{ copiedItems: string[] }>;
+  syncProfileResources: (input: SyncResourcesInput) => Promise<{
+    copiedItems: string[];
+    syncedConversations?: number;
+  }>;
+  getProfileStats: (profileId: string) => Promise<ProfileConversationStats>;
   listConfigBackups: (profileId: string) => Promise<ConfigBackupItem[]>;
   restoreConfigBackup: (input: { profileId: string; backupPath: string }) => Promise<{ ok: boolean }>;
   readProfileLaunchLog: (profileId: string) => Promise<string>;

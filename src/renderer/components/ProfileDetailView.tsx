@@ -18,6 +18,7 @@ import type {
   ConfigBackupItem,
   LanguageCode,
   ProfileAuthMode,
+  ProfileConversationStats,
   ProfileRecord,
   ProviderTestResult,
   ReasoningEffort,
@@ -74,8 +75,13 @@ export const ProfileDetailView: React.FC<ProfileDetailViewProps> = ({
   const [modelsList, setModelsList] = useState<string[]>([]);
 
   const [syncSource, setSyncSource] = useState<string>("default");
-  const [syncConfig, setSyncConfig] = useState<boolean>(true);
-  const [syncConv, setSyncConv] = useState<boolean>(false);
+  const [syncConfig, setSyncConfig] = useState<boolean>(false);
+  const [syncConv, setSyncConv] = useState<boolean>(true);
+  const [syncMode, setSyncMode] = useState<"merge" | "replace">("merge");
+  const [syncing, setSyncing] = useState<boolean>(false);
+  const [useDefaultHome, setUseDefaultHome] = useState<boolean>(Boolean(profile.useDefaultHome));
+  const [autoSyncFrom, setAutoSyncFrom] = useState<string>(profile.autoSyncConversationsFrom ?? "");
+  const [profileStats, setProfileStats] = useState<ProfileConversationStats | null>(null);
 
   const [backups, setBackups] = useState<ConfigBackupItem[]>([]);
   const [launchLog, setLaunchLog] = useState<string>("");
@@ -87,7 +93,8 @@ export const ProfileDetailView: React.FC<ProfileDetailViewProps> = ({
       : appInfo?.codexProfileRoot;
 
   const isOutsidePreferredRoot = Boolean(
-    preferredStorageRoot &&
+    !profile.useDefaultHome &&
+      preferredStorageRoot &&
       (!profile.paths.profileHome
         .toLowerCase()
         .startsWith(preferredStorageRoot.toLowerCase()) ||
@@ -109,14 +116,40 @@ export const ProfileDetailView: React.FC<ProfileDetailViewProps> = ({
     setReasoningEffort(profile.provider.reasoningEffort ?? "medium");
     setAppPath(profile.paths.appPath);
     setIconColor(profile.appearance.iconBackgroundColor);
+    setUseDefaultHome(Boolean(profile.useDefaultHome));
+    setAutoSyncFrom(profile.autoSyncConversationsFrom ?? "");
     setTestResult(null);
   }, [profile.id, profile.timestamps.updatedAt]);
+
+  async function loadProfileStats() {
+    try {
+      const stats = await window.multiLauncher.getProfileStats(profile.id);
+      setProfileStats(stats);
+    } catch {
+      setProfileStats(null);
+    }
+  }
+
+  useEffect(() => {
+    if (profile.useDefaultHome && syncSource === "default") {
+      const firstPeer = allProfiles.find(
+        (p) => p.engine === profile.engine && p.id !== profile.id && p.status === "active"
+      );
+      if (firstPeer) {
+        setSyncSource(firstPeer.id);
+      }
+    } else if (!profile.useDefaultHome && syncSource === profile.id) {
+      setSyncSource("default");
+    }
+  }, [profile.id, profile.useDefaultHome, allProfiles]);
 
   useEffect(() => {
     if (tab === "logs") {
       void loadBackupsAndLogs();
+    } else if (tab === "paths") {
+      void loadProfileStats();
     }
-  }, [tab, profile.id]);
+  }, [tab, profile.id, profile.timestamps.updatedAt]);
 
   async function loadBackupsAndLogs() {
     const [b, log] = await Promise.all([
@@ -187,22 +220,81 @@ export const ProfileDetailView: React.FC<ProfileDetailViewProps> = ({
     onNotify(res.summary);
   }
 
+  async function handleSaveSyncPolicy(
+    nextUseDefaultHome: boolean,
+    nextAutoSyncFrom: string
+  ) {
+    setSaving(true);
+    try {
+      await window.multiLauncher.updateProfile({
+        profileId: profile.id,
+        useDefaultHome: nextUseDefaultHome,
+        autoSyncConversationsFrom: nextUseDefaultHome ? "" : nextAutoSyncFrom,
+        provider: {
+          displayName: profile.provider.displayName,
+          baseUrl: profile.provider.baseUrl,
+          model: profile.provider.model,
+          proxyUrl: profile.provider.proxyUrl,
+          reasoningEffort: profile.provider.reasoningEffort,
+          wslDistro: profile.provider.wslDistro,
+          googleCloudProject: profile.provider.googleCloudProject
+        }
+      });
+      setUseDefaultHome(nextUseDefaultHome);
+      setAutoSyncFrom(nextUseDefaultHome ? "" : nextAutoSyncFrom);
+      onUpdated();
+      await loadProfileStats();
+      onNotify(
+        nextUseDefaultHome
+          ? t(
+              lang,
+              "已关联本机默认 Antigravity 主窗口：聊天记录与登录态将实时共享",
+              "Bound to native default Antigravity window"
+            )
+          : t(lang, "同步策略已保存", "Sync policy saved")
+      );
+    } catch (err) {
+      onNotify(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function handleSyncNow() {
+    setSyncing(true);
     try {
       const res = await window.multiLauncher.syncProfileResources({
         profileId: profile.id,
         syncConfigAndSkills: syncConfig,
         syncConversations: syncConv,
         sourceType: syncSource === "default" ? "default" : "profile",
-        sourceProfileId: syncSource === "default" ? undefined : syncSource
+        sourceProfileId: syncSource === "default" ? undefined : syncSource,
+        syncMode
       });
-      onNotify(
-        res.copiedItems.length > 0
-          ? `${t(lang, "已同步：", "Synced: ")}${res.copiedItems.join(", ")}`
-          : t(lang, "未发现可同步的源数据文件", "No source items found to sync")
-      );
+      await loadProfileStats();
+      if (res.copiedItems.length > 0) {
+        const convNote =
+          typeof res.syncedConversations === "number"
+            ? t(
+                lang,
+                `（已更新 ${res.syncedConversations} 条对话记录）`,
+                ` (${res.syncedConversations} conversations updated)`
+              )
+            : "";
+        onNotify(`${t(lang, "同步完成：", "Synced: ")}${res.copiedItems.join(", ")}${convNote}`);
+      } else {
+        onNotify(
+          t(
+            lang,
+            "所有对话记录已是最新状态，无需重复拷贝",
+            "Already up to date; no new files to copy"
+          )
+        );
+      }
     } catch (err) {
       onNotify(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSyncing(false);
     }
   }
 
@@ -239,6 +331,11 @@ export const ProfileDetailView: React.FC<ProfileDetailViewProps> = ({
                     : "Antigravity 2.0"
                   : "Codex Desktop"}
               </span>
+              {profile.useDefaultHome && (
+                <span className="status-chip pass">
+                  {t(lang, "默认主窗口共享", "Native Default")}
+                </span>
+              )}
               {isRunning && (
                 <span className="status-chip pass">
                   Running (PID {runtime?.pid ?? "-"})
@@ -580,47 +677,183 @@ export const ProfileDetailView: React.FC<ProfileDetailViewProps> = ({
             </div>
           )}
 
+          {profile.engine === "antigravity" && (
+            <div className="surface-card">
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 12,
+                  marginBottom: 8
+                }}
+              >
+                <h3 className="surface-title" style={{ margin: 0 }}>
+                  {t(lang, "Google 账号聊天记录同步模式", "Account Chat History Sync Mode")}
+                </h3>
+                {profileStats && (
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <span className="status-chip pass">
+                      {t(
+                        lang,
+                        `当前配置会话：${profileStats.conversationCount} 条`,
+                        `Profile Chats: ${profileStats.conversationCount}`
+                      )}
+                    </span>
+                    <span className="count-pill">
+                      {t(
+                        lang,
+                        `默认主窗口会话：${profileStats.defaultConversationCount} 条`,
+                        `Default Window: ${profileStats.defaultConversationCount}`
+                      )}
+                    </span>
+                  </div>
+                )}
+              </div>
+              <p className="surface-desc">
+                {t(
+                  lang,
+                  "Antigravity 聊天记录保存在本地磁盘目录中。主力 Google 账号建议开启下方「关联本机默认主窗口」实现零延迟实时共享；其余 Google 账号保持独立隔离，并可按需开启自动增量同步。",
+                  "Antigravity stores conversations locally. Bind your primary Google account to the native default window for zero-copy live sharing, while keeping secondary accounts isolated."
+                )}
+              </p>
+
+              <div className="form-grid">
+                <label className="toggle-card" style={{ cursor: "pointer" }}>
+                  <div>
+                    <div style={{ fontWeight: 650, fontSize: 13.5 }}>
+                      {t(
+                        lang,
+                        "关联本机默认 Antigravity 主窗口（主账号推荐 · 实时共享聊天记录）",
+                        "Bind to Native Default Antigravity Window (Live Shared History)"
+                      )}
+                    </div>
+                    <div className="field-hint">
+                      {t(
+                        lang,
+                        "开启后，无论是直接点击桌面 Antigravity 还是在多开器中点击本配置，都共用本机 ~/.gemini 实时聊天记录与主账号登录态，不会分裂成两份记录。",
+                        "Launching from desktop icon or Multi Launcher shares the exact same native ~/.gemini conversations and login state."
+                      )}
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={useDefaultHome}
+                    disabled={saving}
+                    onChange={(e) => void handleSaveSyncPolicy(e.target.checked, autoSyncFrom)}
+                  />
+                </label>
+
+                {!useDefaultHome && (
+                  <div className="field-group">
+                    <label className="field-label">
+                      {t(
+                        lang,
+                        "独立隔离模式 · 启动前自动增量合并历史对话",
+                        "Isolated Mode · Auto-Merge Latest Conversations Before Launch"
+                      )}
+                    </label>
+                    <select
+                      className="select-input"
+                      value={autoSyncFrom}
+                      disabled={saving}
+                      onChange={(e) => void handleSaveSyncPolicy(false, e.target.value)}
+                    >
+                      <option value="">
+                        {t(
+                          lang,
+                          "关闭（每个账号完全独立保存自身聊天记录，推荐多账号隔离）",
+                          "Off (Keep completely separate per-account history)"
+                        )}
+                      </option>
+                      <option value="default">
+                        {t(
+                          lang,
+                          "每次启动前，自动从本机默认 Antigravity 主窗口增量同步最新聊天记录",
+                          "Auto-sync latest conversations from Default Antigravity before launch"
+                        )}
+                      </option>
+                      {peerProfiles.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {t(
+                            lang,
+                            `每次启动前，自动从「${p.name}」增量同步聊天记录`,
+                            `Auto-sync from "${p.name}" before launch`
+                          )}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           <div className="surface-card">
-            <h3 className="surface-title">{t(lang, "物理隔离目录与凭据域", "Isolated Directories & Scopes")}</h3>
+            <h3 className="surface-title">
+              {profile.useDefaultHome
+                ? t(lang, "当前关联的本机默认主窗口目录", "Bound Native Default Directories")
+                : t(lang, "物理隔离目录与凭据域", "Isolated Directories & Scopes")}
+            </h3>
             <p className="surface-desc">
-              {t(
-                lang,
-                "每个配置拥有完全独立的应用数据锁与凭据作用域，确保多窗口同时在线不串号。",
-                "Each profile uses dedicated directories and OS keyring scopes."
-              )}
+              {profile.useDefaultHome
+                ? t(
+                    lang,
+                    "当前配置已直接绑定到本机原生 Antigravity 数据目录，与直接点击桌面 Antigravity 图标打开的窗口完全互通。",
+                    "Directly bound to native Antigravity directories and shared in real time with desktop launches."
+                  )
+                : t(
+                    lang,
+                    "每个配置拥有完全独立的应用数据锁与凭据作用域，确保多窗口同时在线不串号。",
+                    "Each profile uses dedicated directories and OS keyring scopes."
+                  )}
             </p>
             <div className="form-grid">
               <div className="path-box">
                 <div>
                   <div style={{ fontWeight: 650 }}>
-                    {profile.engine === "antigravity"
-                      ? "Profile Home (.gemini 宿主目录)"
-                      : "CODEX_HOME"}
+                    {profile.useDefaultHome
+                      ? t(lang, "本机默认 Antigravity 数据目录 (实时共享)", "Native Default Antigravity Data Dir")
+                      : profile.engine === "antigravity"
+                        ? "Profile Home (.gemini 宿主目录)"
+                        : "CODEX_HOME"}
                   </div>
-                  <div className="mono-text">{profile.paths.profileHome}</div>
+                  <div className="mono-text">
+                    {profile.useDefaultHome && profileStats
+                      ? profileStats.effectiveDataDir
+                      : profile.paths.profileHome}
+                  </div>
                 </div>
                 <button
                   className="btn"
-                  onClick={() => window.multiLauncher.revealPath(profile.paths.profileHome)}
+                  onClick={() =>
+                    window.multiLauncher.revealPath(
+                      profile.useDefaultHome && profileStats
+                        ? profileStats.effectiveDataDir
+                        : profile.paths.profileHome
+                    )
+                  }
                 >
                   <FolderOpen size={14} />
                   <span>{t(lang, "打开", "Open")}</span>
                 </button>
               </div>
 
-              <div className="path-box">
-                <div>
-                  <div style={{ fontWeight: 650 }}>Chromium / Electron --user-data-dir</div>
-                  <div className="mono-text">{profile.paths.userDataDir}</div>
+              {!profile.useDefaultHome && (
+                <div className="path-box">
+                  <div>
+                    <div style={{ fontWeight: 650 }}>Chromium / Electron --user-data-dir</div>
+                    <div className="mono-text">{profile.paths.userDataDir}</div>
+                  </div>
+                  <button
+                    className="btn"
+                    onClick={() => window.multiLauncher.revealPath(profile.paths.userDataDir)}
+                  >
+                    <FolderOpen size={14} />
+                    <span>{t(lang, "打开", "Open")}</span>
+                  </button>
                 </div>
-                <button
-                  className="btn"
-                  onClick={() => window.multiLauncher.revealPath(profile.paths.userDataDir)}
-                >
-                  <FolderOpen size={14} />
-                  <span>{t(lang, "打开", "Open")}</span>
-                </button>
-              </div>
+              )}
 
               <div className="path-box">
                 <div>
@@ -638,13 +871,15 @@ export const ProfileDetailView: React.FC<ProfileDetailViewProps> = ({
                 </button>
               </div>
 
-              {profile.credentialScope && (
+              {!profile.useDefaultHome && profile.credentialScope && (
                 <div className="path-box">
                   <div>
                     <div style={{ fontWeight: 650 }}>
-                      OS Keyring Scope (ANTIGRAVITY_CREDENTIAL_SCOPE)
+                      {t(lang, "独立账号凭据隔离文件", "Isolated Credential Storage")}
                     </div>
-                    <div className="mono-text">gemini:{profile.credentialScope}</div>
+                    <div className="mono-text">
+                      {profile.paths.profileHome}\.gemini\jetski-standalone-oauth-token (scope: {profile.credentialScope})
+                    </div>
                   </div>
                 </div>
               )}
@@ -656,34 +891,70 @@ export const ProfileDetailView: React.FC<ProfileDetailViewProps> = ({
               {t(lang, "手动同步技能、MCP 与历史会话", "Sync Skills, MCP & Conversations")}
             </h3>
             <p className="surface-desc">
-              {t(
-                lang,
-                "随时从默认客户端或其他同引擎多开配置增量同步插件技能与会话数据。",
-                "Sync MCP servers, skills, plugins, or conversation history on demand."
-              )}
+              {profile.useDefaultHome
+                ? t(
+                    lang,
+                    "当前配置已与默认主窗口实时共享，无需从默认主窗口手动拷贝；如需从其他独立配置导入对话，请在下方选择其他来源。",
+                    "Already sharing live history with default Antigravity. Select another profile below if you want to import from it."
+                  )
+                : t(
+                    lang,
+                    "随时从本机默认窗口或其他同引擎多开配置同步历史对话、Brain 产物、MCP 与技能（同步对话前请确保目标窗口已关闭）。",
+                    "Sync MCP servers, skills, plugins, or conversation history on demand (stop target window first)."
+                  )}
             </p>
             <div className="form-grid">
-              <div className="field-group">
-                <label className="field-label">{t(lang, "同步来源", "Source")}</label>
-                <select
-                  className="select-input"
-                  value={syncSource}
-                  onChange={(e) => setSyncSource(e.target.value)}
-                >
-                  <option value="default">
-                    {profile.engine === "antigravity"
-                      ? t(lang, "本机默认 Antigravity (~/.gemini)", "Default Antigravity (~/.gemini)")
-                      : t(lang, "本机默认 Codex (~/.codex)", "Default Codex (~/.codex)")}
-                  </option>
-                  {peerProfiles.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name} ({p.id})
-                    </option>
-                  ))}
-                </select>
+              <div className="form-row-2">
+                <div className="field-group">
+                  <label className="field-label">{t(lang, "同步来源", "Source")}</label>
+                  <select
+                    className="select-input"
+                    value={syncSource}
+                    onChange={(e) => setSyncSource(e.target.value)}
+                  >
+                    {!profile.useDefaultHome && (
+                      <option value="default">
+                        {profile.engine === "antigravity"
+                          ? t(lang, "本机默认 Antigravity 主窗口 (~/.gemini)", "Default Antigravity (~/.gemini)")
+                          : t(lang, "本机默认 Codex (~/.codex)", "Default Codex (~/.codex)")}
+                      </option>
+                    )}
+                    {peerProfiles.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} ({p.id})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {profile.engine === "antigravity" && (
+                  <div className="field-group">
+                    <label className="field-label">{t(lang, "对话同步策略", "Sync Strategy")}</label>
+                    <select
+                      className="select-input"
+                      value={syncMode}
+                      onChange={(e) => setSyncMode(e.target.value as "merge" | "replace")}
+                    >
+                      <option value="merge">
+                        {t(lang, "安全增量合并（推荐 · 保留双方所有对话）", "Safe Merge (Keep both sides)")}
+                      </option>
+                      <option value="replace">
+                        {t(lang, "完全镜像同步（使目标与来源对话完全一致）", "Mirror Replace (Match source exactly)")}
+                      </option>
+                    </select>
+                  </div>
+                )}
               </div>
 
               <div className="form-row-2">
+                <label className="toggle-card" style={{ cursor: "pointer" }}>
+                  <span>{t(lang, "同步历史对话记录与产物 (conversations / brain)", "Sync Conversation History & Artifacts")}</span>
+                  <input
+                    type="checkbox"
+                    checked={syncConv}
+                    onChange={(e) => setSyncConv(e.target.checked)}
+                  />
+                </label>
                 <label className="toggle-card" style={{ cursor: "pointer" }}>
                   <span>{t(lang, "同步 MCP、Skills 与全局设置", "Sync MCP, Skills & Settings")}</span>
                   <input
@@ -692,24 +963,29 @@ export const ProfileDetailView: React.FC<ProfileDetailViewProps> = ({
                     onChange={(e) => setSyncConfig(e.target.checked)}
                   />
                 </label>
-                <label className="toggle-card" style={{ cursor: "pointer" }}>
-                  <span>{t(lang, "同步历史对话记录", "Sync Conversation History")}</span>
-                  <input
-                    type="checkbox"
-                    checked={syncConv}
-                    onChange={(e) => setSyncConv(e.target.checked)}
-                  />
-                </label>
               </div>
 
-              <div style={{ display: "flex", justifyContent: "flex-end" }}>
+              <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10 }}>
+                {isRunning && syncConv && (
+                  <span style={{ fontSize: 12, color: "var(--danger)" }}>
+                    {t(lang, "同步对话前请先点击右上角「停止实例」关闭此窗口", "Stop this window before syncing conversations")}
+                  </span>
+                )}
                 <button
                   className="btn btn-primary"
-                  disabled={!syncConfig && !syncConv}
+                  disabled={
+                    syncing ||
+                    (!syncConfig && !syncConv) ||
+                    (profile.useDefaultHome && syncSource === "default")
+                  }
                   onClick={handleSyncNow}
                 >
                   <Share2 size={14} />
-                  <span>{t(lang, "立即执行同步", "Sync Now")}</span>
+                  <span>
+                    {syncing
+                      ? t(lang, "正在同步...", "Syncing...")
+                      : t(lang, "立即执行同步", "Sync Now")}
+                  </span>
                 </button>
               </div>
             </div>
@@ -845,34 +1121,48 @@ export const ProfileDetailView: React.FC<ProfileDetailViewProps> = ({
             <div className="toggle-card" style={{ borderColor: "rgba(220,38,38,0.35)" }}>
               <div>
                 <div style={{ fontWeight: 700, color: "var(--danger)" }}>
-                  {t(lang, "永久销毁配置与隔离数据", "Permanently Delete & Wipe Data")}
+                  {profile.useDefaultHome
+                    ? t(lang, "移除此默认主窗口快捷配置", "Delete Default Window Entry")
+                    : t(lang, "永久销毁配置与隔离数据", "Permanently Delete & Wipe Data")}
                 </div>
                 <div className="field-hint">
-                  {t(
-                    lang,
-                    "自动停止实例并彻底删除该配置的独立主目录、user-data-dir、快捷启动器及独立凭据域，不可恢复。",
-                    "Stops running instance and permanently deletes isolated directories, shortcuts, and keyring credentials."
-                  )}
+                  {profile.useDefaultHome
+                    ? t(
+                        lang,
+                        "仅从多开管理器中移除此快捷入口与桌面脚本，绝不会删除本机默认 ~/.gemini 聊天记录与登录态。",
+                        "Removes only the launcher entry and shortcut; native ~/.gemini data is never deleted."
+                      )
+                    : t(
+                        lang,
+                        "自动停止实例并彻底删除该配置的独立主目录、user-data-dir、快捷启动器及独立凭据域，不可恢复。",
+                        "Stops running instance and permanently deletes isolated directories, shortcuts, and keyring credentials."
+                      )}
                 </div>
               </div>
               <button
                 className="btn btn-danger"
                 onClick={async () => {
                   const ok = window.confirm(
-                    t(
-                      lang,
-                      `确定永久销毁配置 "${profile.name}" 及其所有本地隔离目录吗？此操作不可撤销。`,
-                      `Permanently delete "${profile.name}" and wipe its isolated directories?`
-                    )
+                    profile.useDefaultHome
+                      ? t(
+                          lang,
+                          `确定从多开管理器中移除 "${profile.name}" 快捷入口吗？（本机默认 Antigravity 数据不会被删除）`,
+                          `Remove "${profile.name}" launcher entry? (Native Antigravity data is preserved)`
+                        )
+                      : t(
+                          lang,
+                          `确定永久销毁配置 "${profile.name}" 及其所有本地隔离目录吗？此操作不可撤销。`,
+                          `Permanently delete "${profile.name}" and wipe its isolated directories?`
+                        )
                   );
                   if (!ok) return;
                   await window.multiLauncher.permanentlyDeleteProfile(profile.id);
                   onDeleted();
-                  onNotify(t(lang, "已永久销毁该配置", "Profile permanently deleted"));
+                  onNotify(t(lang, "已移除该配置", "Profile permanently deleted"));
                 }}
               >
                 <Trash2 size={14} />
-                <span>{t(lang, "永久销毁", "Delete Permanently")}</span>
+                <span>{profile.useDefaultHome ? t(lang, "移除入口", "Remove Entry") : t(lang, "永久销毁", "Delete Permanently")}</span>
               </button>
             </div>
           </div>

@@ -161,13 +161,21 @@ export async function createProfileRecord(input: CreateProfileInput): Promise<Pr
       ? "OPENAI_API_KEY"
       : `CODEX_PROFILE_${sanitizedEnvSuffix}_API_KEY`;
 
+  const useDefaultHome = Boolean(isAntigravity && input.useDefaultHome);
+  const autoSyncFrom =
+    !useDefaultHome && input.autoSyncConversationsFrom?.trim()
+      ? input.autoSyncConversationsFrom.trim()
+      : undefined;
+
   const profile: ProfileRecord = {
     id,
     name: input.name.trim(),
     engine: input.engine,
     ...(variant ? { antigravityVariant: variant } : {}),
     status: "active",
-    ...(isAntigravity ? { credentialScope: `agy-profile-${id}` } : {}),
+    ...(isAntigravity && !useDefaultHome ? { credentialScope: `agy-profile-${id}` } : {}),
+    ...(useDefaultHome ? { useDefaultHome: true } : {}),
+    ...(autoSyncFrom ? { autoSyncConversationsFrom: autoSyncFrom } : {}),
     paths: {
       appPath: resolvedApp.appPath,
       profileHome,
@@ -271,6 +279,19 @@ export async function updateProfileRecord(input: UpdateProfileInput): Promise<Pr
   }
   if (profile.engine === "antigravity" && input.antigravityVariant) {
     profile.antigravityVariant = input.antigravityVariant;
+  }
+  if (profile.engine === "antigravity" && input.useDefaultHome !== undefined) {
+    profile.useDefaultHome = input.useDefaultHome ? true : undefined;
+    if (profile.useDefaultHome) {
+      profile.autoSyncConversationsFrom = undefined;
+    } else if (!profile.credentialScope) {
+      profile.credentialScope = `agy-profile-${profile.id}`;
+    }
+  }
+  if (input.autoSyncConversationsFrom !== undefined) {
+    const trimmedSync = input.autoSyncConversationsFrom.trim();
+    profile.autoSyncConversationsFrom =
+      trimmedSync && !profile.useDefaultHome ? trimmedSync : undefined;
   }
   if (input.authMode) {
     profile.auth.mode = input.authMode;
