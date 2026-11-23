@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { ProfileRecord, RuntimeStatusItem } from "../../src/shared/types.js";
-import { getDefaultAntigravityUserDataDir, getRuntimePlatform } from "./paths.js";
+import { getDefaultAntigravityUserDataDir, getRuntimePlatform, resolveAntigravityApp } from "./paths.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -12,12 +12,13 @@ export interface ProcessRow {
   command: string;
   name?: string | null;
   executablePath?: string | null;
+  startedAt?: string | null;
 }
 
 async function listSystemProcesses(): Promise<ProcessRow[]> {
   if (getRuntimePlatform() === "win32") {
     const script =
-      "Get-CimInstance Win32_Process | Where-Object { ($_.CommandLine -match 'user-data-dir|\\.gemini|profiles|Antigravity') -and ($_.Name -notmatch 'Antigravity Multi Launcher|powershell|pwsh') } | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine | ConvertTo-Json -Compress";
+      "Get-CimInstance Win32_Process | Where-Object { ($_.CommandLine -match 'user-data-dir|\\.gemini|profiles|Antigravity' -or -not $_.CommandLine) -and ($_.Name -notmatch 'Antigravity Multi Launcher|powershell|pwsh') } | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine,@{Name='StartedAt';Expression={if ($_.CreationDate) {$_.CreationDate.ToUniversalTime().ToString('o')}}} | ConvertTo-Json -Compress";
     const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-Command", script], {
       maxBuffer: 8 * 1024 * 1024,
       timeout: 8000
@@ -27,13 +28,14 @@ async function listSystemProcesses(): Promise<ProcessRow[]> {
     const parsed = JSON.parse(trimmed);
     const rows = Array.isArray(parsed) ? parsed : [parsed];
     return rows
-      .filter((r) => r && typeof r.ProcessId === "number" && typeof r.CommandLine === "string")
+      .filter((r) => r && typeof r.ProcessId === "number")
       .map((r) => ({
         pid: r.ProcessId as number,
         parentPid: typeof r.ParentProcessId === "number" ? r.ParentProcessId : null,
         name: typeof r.Name === "string" ? r.Name : null,
-        command: r.CommandLine as string,
-        executablePath: typeof r.ExecutablePath === "string" ? r.ExecutablePath : null
+        command: typeof r.CommandLine === "string" ? r.CommandLine : "",
+        executablePath: typeof r.ExecutablePath === "string" ? r.ExecutablePath : null,
+        startedAt: typeof r.StartedAt === "string" ? r.StartedAt : null
       }));
   }
 
@@ -139,7 +141,7 @@ export function matchesProfileProcess(
   profile: ProfileRecord,
   meta?: { name?: string | null; executablePath?: string | null }
 ): boolean {
-  if (isManagerProcess(command, meta?.name) || isSidecarOrShellHelper(command, meta?.name)) {
+  if (!command || isManagerProcess(command, meta?.name) || isSidecarOrShellHelper(command, meta?.name)) {
     return false;
   }
 
@@ -198,6 +200,27 @@ function selectPrimaryPid(matches: ProcessRow[]): number | null {
   return matches[0].pid;
 }
 
+function findTrackedElevatedProcess(processes: ProcessRow[], profile: ProfileRecord): ProcessRow | undefined {
+  const { lastKnownPid, lastKnownUserDataDir, lastLaunchedAt } = profile.launch;
+  if (
+    getRuntimePlatform() !== "win32" || profile.engine !== "antigravity" || !lastKnownPid ||
+    lastKnownUserDataDir !== profile.paths.userDataDir || !lastLaunchedAt
+  ) return undefined;
+
+  // WMI hides a higher-integrity process's command line from the launcher. Only trust a
+  // recorded PID if the image name matches and the PID has not been reused since launch.
+  const candidate = processes.find((row) => row.pid === lastKnownPid && !row.command);
+  if (!candidate?.startedAt || !(Date.parse(candidate.startedAt) <= Date.parse(lastLaunchedAt))) {
+    return undefined;
+  }
+  const executable = resolveAntigravityApp(profile.paths.appPath, profile.antigravityVariant).executablePath;
+  return candidate.name?.toLowerCase() === path.win32.basename(executable).toLowerCase() ? candidate : undefined;
+}
+
+export async function findTrackedElevatedAntigravityPid(profile: ProfileRecord): Promise<number | null> {
+  return findTrackedElevatedProcess(await listSystemProcesses(), profile)?.pid ?? null;
+}
+
 export async function inspectProfilesRuntime(
   profiles: ProfileRecord[]
 ): Promise<RuntimeStatusItem[]> {
@@ -221,6 +244,10 @@ export async function inspectProfilesRuntime(
         executablePath: row.executablePath
       })
     );
+    const elevated = matched.length === 0 ? findTrackedElevatedProcess(processes, profile) : undefined;
+    if (elevated) {
+      return { profileId: profile.id, status: "running", pid: elevated.pid, processCount: 1, detail: "Active (elevated)" };
+    }
     if (matched.length === 0) {
       return {
         profileId: profile.id,
@@ -252,7 +279,10 @@ export async function findRunningProfilePrimaryProcess(
         executablePath: row.executablePath
       })
     );
-    if (matched.length === 0) return null;
+    if (matched.length === 0) {
+      const elevated = findTrackedElevatedProcess(processes, profile);
+      return elevated ? { pid: elevated.pid, executablePath: elevated.executablePath ?? null } : null;
+    }
     const primaryPid = selectPrimaryPid(matched);
     if (!primaryPid) return null;
     const primaryRow = matched.find((m) => m.pid === primaryPid) ?? matched[0];

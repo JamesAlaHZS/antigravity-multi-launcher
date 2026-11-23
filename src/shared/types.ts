@@ -218,6 +218,14 @@ export interface LegacyCodexProfileCandidate {
   alreadyImported: boolean;
 }
 
+export interface AntigravityHansStatus {
+  installed: boolean;
+  version: string | null;
+  updatedAt: string | null;
+  cachePath: string;
+  activeSessions: number;
+}
+
 export interface AppSettings {
   language: LanguageCode;
   theme: "light" | "dark";
@@ -227,6 +235,8 @@ export interface AppSettings {
   defaultAntigravityIdePath?: string;
   defaultCodexAppPath?: string;
   defaultLauncherRoot?: string;
+  antigravityChineseUi?: boolean;
+  antigravityChineseAiRules?: boolean;
   autoRefreshRuntimeSeconds: number;
 }
 
@@ -295,6 +305,8 @@ export interface MultiLauncherApi {
   }) => Promise<ProviderModelsResult>;
   detectLegacyCodexProfiles: () => Promise<LegacyCodexProfileCandidate[]>;
   importLegacyCodexProfiles: (profileIds?: string[]) => Promise<{ importedCount: number }>;
+  getAntigravityHansStatus: () => Promise<AntigravityHansStatus>;
+  updateAntigravityHansOverlay: () => Promise<AntigravityHansStatus>;
 }
 
 declare global {

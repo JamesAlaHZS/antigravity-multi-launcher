@@ -549,15 +549,25 @@ export interface AntigravityLaunchSpec {
 export function buildAntigravityLaunchSpec(
   profile: ProfileRecord,
   executablePath: string,
-  secretApiKey: string | null
+  secretApiKey: string | null,
+  options?: { remoteDebuggingPort?: number }
 ): AntigravityLaunchSpec {
   const platform = getRuntimePlatform();
   const realHome = getRealHomeDir();
   const args: string[] = [];
+  const debugPort =
+    options?.remoteDebuggingPort &&
+    Number.isInteger(options.remoteDebuggingPort) &&
+    options.remoteDebuggingPort > 0
+      ? options.remoteDebuggingPort
+      : null;
 
   // Native default Antigravity binding: launch cleanly without overriding HOME / user-data-dir / keyring
   // so direct desktop clicks and Multi Launcher share 100% live conversations and login state.
   if (profile.useDefaultHome) {
+    if (debugPort) {
+      args.push(`--remote-debugging-port=${debugPort}`);
+    }
     if (platform === "win32" && profile.provider.wslDistro !== undefined) {
       const trimmedDistro = profile.provider.wslDistro.trim();
       if (trimmedDistro) {
@@ -584,6 +594,9 @@ export function buildAntigravityLaunchSpec(
   const credentialScope = profile.credentialScope || `agy-profile-${profile.id}`;
 
   args.push(`--user-data-dir=${profile.paths.userDataDir}`);
+  if (debugPort) {
+    args.push(`--remote-debugging-port=${debugPort}`);
+  }
   if (profile.antigravityVariant === "antigravity_ide" && profile.paths.extensionsDir) {
     args.push(`--extensions-dir=${profile.paths.extensionsDir}`);
   }

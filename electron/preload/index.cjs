@@ -32,7 +32,9 @@ const api = {
   listProviderModels: (input) => ipcRenderer.invoke("provider:models", input),
   listProfileProviderModels: (input) => ipcRenderer.invoke("profiles:models", input),
   detectLegacyCodexProfiles: () => ipcRenderer.invoke("legacy:detect-codex"),
-  importLegacyCodexProfiles: (profileIds) => ipcRenderer.invoke("legacy:import-codex", profileIds)
+  importLegacyCodexProfiles: (profileIds) => ipcRenderer.invoke("legacy:import-codex", profileIds),
+  getAntigravityHansStatus: () => ipcRenderer.invoke("hans:status"),
+  updateAntigravityHansOverlay: () => ipcRenderer.invoke("hans:update")
 };
 
 contextBridge.exposeInMainWorld("multiLauncher", api);

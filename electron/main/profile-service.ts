@@ -26,6 +26,13 @@ import {
   writeAntigravityProfileConfig
 } from "./antigravity-config.js";
 import {
+  allocateHansDebugPort,
+  ensureChineseGeminiRules,
+  releaseHansDebugPort,
+  startProfileHansMonitor,
+  stopProfileHansMonitor
+} from "./antigravity-hans.js";
+import {
   buildCodexLaunchSpec,
   inheritDefaultCodexResources,
   listCodexConfigBackups,
@@ -53,6 +60,7 @@ import {
   createProfileRecord,
   findProfile,
   getEffectiveStorageRoots,
+  getSettings,
   listProfiles,
   removeProfileRecord,
   restoreProfileRecord,
@@ -63,11 +71,13 @@ import {
 } from "./registry.js";
 import {
   findRunningProfilePrimaryProcess,
+  findTrackedElevatedAntigravityPid,
   inspectProfilesRuntime,
   stopOrphanProfileHelpers,
   stopProfileProcesses
 } from "./runtime.js";
 import { deleteProfileSecret, getProfileSecret, upsertProfileSecret } from "./secrets.js";
+import { runAntigravityAsAdministrator } from "./windows-antigravity-elevation.js";
 import { ensureWindowsAppxDesktopCache } from "./windows-appx-cache.js";
 import {
   focusWindowsProcessWindow,
@@ -207,7 +217,8 @@ export async function updateProfile(
 }
 
 export async function openProfile(
-  profileId: string
+  profileId: string,
+  options: { elevatedWorker?: boolean } = {}
 ): Promise<{ pid: number | null; focusedExisting?: boolean }> {
   const profile = await mustFindProfile(profileId);
   const log = await createLaunchLogger(profile);
@@ -242,10 +253,25 @@ export async function openProfile(
       env: NodeJS.ProcessEnv;
     };
     let codexWindowsAppUserModelId: string | null = null;
+    let hansDebugPort: number | undefined;
+    const settings = await getSettings();
 
     if (profile.engine === "antigravity") {
       await prepareAntigravityProfileEnvironment(profile);
       await writeAntigravityProfileConfig(profile);
+
+      if (settings.antigravityChineseAiRules) {
+        try {
+          const added = await ensureChineseGeminiRules(getProfileGeminiDir(profile));
+          if (added) {
+            await log("ensured Simplified Chinese global AI rule in GEMINI.md");
+          }
+        } catch (ruleErr) {
+          await log("failed to ensure Chinese GEMINI.md rule (continuing launch)", {
+            error: ruleErr instanceof Error ? ruleErr.message : String(ruleErr)
+          });
+        }
+      }
 
       if (!profile.useDefaultHome && profile.autoSyncConversationsFrom && !runningPrimary) {
         try {
@@ -283,7 +309,25 @@ export async function openProfile(
           `未找到 Antigravity 可执行文件: ${executablePath}。请在配置详情或设置中指定正确的安装路径。`
         );
       }
-      launchSpec = buildAntigravityLaunchSpec(profile, executablePath, secretKey);
+      if (settings.antigravityChineseUi && !runningPrimary) {
+        try {
+          hansDebugPort = await allocateHansDebugPort(
+            profile.id,
+            profile.antigravityVariant ?? "antigravity_app"
+          );
+          await log("allocated CDP remote debugging port for Chinese UI localization", {
+            port: hansDebugPort
+          });
+        } catch (portErr) {
+          await log("failed to allocate CDP port for Chinese UI localization", {
+            error: portErr instanceof Error ? portErr.message : String(portErr)
+          });
+        }
+      }
+
+      launchSpec = buildAntigravityLaunchSpec(profile, executablePath, secretKey, {
+        remoteDebuggingPort: hansDebugPort
+      });
     } else {
       const codexConfigPath = path.join(profile.paths.profileHome, "config.toml");
       // For ChatGPT account login profiles, preserve any existing config.toml so in-app model switches stay intact
@@ -359,7 +403,7 @@ export async function openProfile(
     });
 
     let earlyExit: { code: number | null; signal: NodeJS.Signals | null } | null = null;
-    let spawnErr: Error | null = null;
+    let spawnErr: NodeJS.ErrnoException | null = null;
 
     child.once("error", (err) => {
       spawnErr = err;
@@ -387,9 +431,28 @@ export async function openProfile(
 
     child.unref();
 
+    await new Promise((r) => setTimeout(r, runningPrimary ? 600 : 900));
+    const launchError = spawnErr as NodeJS.ErrnoException | null;
+    if (launchError) {
+      if (
+        launchError.code === "EACCES" &&
+        getRuntimePlatform() === "win32" &&
+        profile.engine === "antigravity" &&
+        process.versions.electron &&
+        !(process as NodeJS.Process & { defaultApp?: boolean }).defaultApp &&
+        !options.elevatedWorker &&
+        await runAntigravityAsAdministrator(profile.id, { executablePath: launchSpec.command })
+      ) {
+        const launchedProfile = await findProfile(profile.id);
+        const pid = launchedProfile?.launch.lastKnownPid ?? null;
+        await log("Antigravity launched through Windows elevation", { pid });
+        return { pid, focusedExisting: Boolean(runningPrimary) };
+      }
+      throw launchError;
+    }
+
     // Case 1: Waking an already-running instance (e.g. hidden in Windows system tray or behind other windows)
     if (runningPrimary) {
-      await new Promise((r) => setTimeout(r, 600));
       if (getRuntimePlatform() === "win32") {
         const focusRes = await focusWindowsProcessWindow(runningPrimary.pid, 4500);
         await log("focused existing profile window", { ...focusRes });
@@ -399,10 +462,6 @@ export async function openProfile(
     }
 
     // Case 2: Fresh launch — wait briefly to ensure the binary did not immediately die (e.g. broken stub/crash)
-    await new Promise((r) => setTimeout(r, 900));
-    if (spawnErr) {
-      throw spawnErr;
-    }
     if (earlyExit) {
       const postCheck = await findRunningProfilePrimaryProcess(profile);
       if (!postCheck) {
@@ -416,15 +475,40 @@ export async function openProfile(
         await log("focused newly detected profile window", { ...focusRes });
       }
       await updateProfileLaunchMetadata(profile.id, postCheck.pid);
+      if (profile.engine === "antigravity" && hansDebugPort && !options.elevatedWorker) {
+        void startProfileHansMonitor(
+          profile.id,
+          hansDebugPort,
+          profile.antigravityVariant ?? "antigravity_app"
+        ).then((started) =>
+          log("Antigravity-Hans dynamic Chinese UI monitor status", {
+            port: hansDebugPort,
+            started
+          })
+        );
+      }
       return { pid: postCheck.pid };
     }
 
     const spawnedPid = child.pid ?? null;
     await updateProfileLaunchMetadata(profile.id, spawnedPid);
 
+    if (profile.engine === "antigravity" && hansDebugPort && !options.elevatedWorker) {
+      void startProfileHansMonitor(
+        profile.id,
+        hansDebugPort,
+        profile.antigravityVariant ?? "antigravity_app"
+      ).then((started) =>
+        log("Antigravity-Hans dynamic Chinese UI monitor status", {
+          port: hansDebugPort,
+          started
+        })
+      );
+    }
+
     // Background Windows polish: restore native taskbar icon (AppUserModelId) & ensure window comes to foreground
     if (getRuntimePlatform() === "win32" && spawnedPid) {
-      void (async () => {
+      const focusWindow = async () => {
         if (codexWindowsAppUserModelId) {
           const identityRes = await restoreWindowsDesktopTaskbarIdentity(
             spawnedPid,
@@ -436,11 +520,17 @@ export async function openProfile(
         }
         const focusRes = await focusWindowsProcessWindow(spawnedPid, 18000);
         await log("ensured fresh profile window foreground", { ...focusRes });
-      })();
+      };
+      if (options.elevatedWorker) {
+        await focusWindow();
+      } else {
+        void focusWindow();
+      }
     }
 
     return { pid: spawnedPid };
   } catch (err) {
+    releaseHansDebugPort(profile.id);
     await log("openProfile failed", {
       error: err instanceof Error ? err.message : String(err)
     });
@@ -449,7 +539,15 @@ export async function openProfile(
 }
 
 export async function stopProfile(profileId: string): Promise<{ stoppedPids: number[] }> {
+  stopProfileHansMonitor(profileId);
   const profile = await mustFindProfile(profileId);
+  if (profile.engine === "antigravity" && getRuntimePlatform() === "win32") {
+    const pid = await findTrackedElevatedAntigravityPid(profile);
+    if (pid) {
+      await runAntigravityAsAdministrator(profile.id, "stop");
+      return { stoppedPids: [pid] };
+    }
+  }
   const stoppedPids = await stopProfileProcesses(profile);
   return { stoppedPids };
 }

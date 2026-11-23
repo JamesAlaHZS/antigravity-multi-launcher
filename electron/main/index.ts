@@ -36,6 +36,13 @@ import {
   listProfiles,
   updateSettings
 } from "./registry.js";
+import {
+  downloadAntigravityHansOverlay,
+  getAntigravityHansStatus,
+  stopAllHansMonitors
+} from "./antigravity-hans.js";
+import { stopProfileProcesses } from "./runtime.js";
+import { parseElevatedAntigravityArg } from "./windows-antigravity-elevation.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -45,9 +52,11 @@ function parseOpenProfileArg(argv: string[]): string | null {
 }
 
 const initialOpenProfileId = parseOpenProfileArg(process.argv);
+const elevatedAntigravityAction = process.platform === "win32" && app.isPackaged
+  ? parseElevatedAntigravityArg(process.argv)
+  : null;
 
-const gotLock = app.requestSingleInstanceLock();
-if (!gotLock) {
+if (!elevatedAntigravityAction && !app.requestSingleInstanceLock()) {
   app.quit();
   process.exit(0);
 }
@@ -199,6 +208,9 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle("legacy:detect-codex", () => detectLegacyCodexProfiles());
   ipcMain.handle("legacy:import-codex", (_e, ids?: string[]) => importLegacyCodexProfiles(ids));
+
+  ipcMain.handle("hans:status", () => getAntigravityHansStatus());
+  ipcMain.handle("hans:update", () => downloadAntigravityHansOverlay());
 }
 
 app.on("second-instance", (_event, argv) => {
@@ -222,6 +234,26 @@ app.on("second-instance", (_event, argv) => {
 });
 
 app.whenReady().then(async () => {
+  if (elevatedAntigravityAction) {
+    try {
+      const profile = await findProfile(elevatedAntigravityAction.profileId);
+      if (profile?.engine !== "antigravity" || profile.status !== "active") {
+        app.exit(1);
+        return;
+      }
+      if (elevatedAntigravityAction.stop) {
+        const stopped = await stopProfileProcesses(profile);
+        app.exit(stopped.length ? 0 : 1);
+        return;
+      }
+      await openProfile(profile.id, { elevatedWorker: true });
+      app.exit(0);
+    } catch {
+      app.exit(1);
+    }
+    return;
+  }
+
   registerIpcHandlers();
 
   if (initialOpenProfileId) {
@@ -246,6 +278,10 @@ app.whenReady().then(async () => {
       void createMainWindow();
     }
   });
+});
+
+app.on("before-quit", () => {
+  stopAllHansMonitors();
 });
 
 app.on("window-all-closed", () => {
