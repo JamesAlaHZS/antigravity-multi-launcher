@@ -246,7 +246,10 @@ app.whenReady().then(async () => {
         app.exit(stopped.length ? 0 : 1);
         return;
       }
-      await openProfile(profile.id, { elevatedWorker: true });
+      await openProfile(profile.id, {
+        elevatedWorker: true,
+        remoteDebuggingPort: elevatedAntigravityAction.hansPort
+      });
       app.exit(0);
     } catch {
       app.exit(1);

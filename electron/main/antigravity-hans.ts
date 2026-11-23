@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
@@ -13,6 +14,7 @@ const MAX_OVERLAY_BYTES = 2 * 1024 * 1024;
 const HANS_RAW_BASE_URL = "https://raw.githubusercontent.com/yuexps/Antigravity-Hans/main";
 const HANS_OVERLAY_FILENAME = "antigravity-hans-overlay.js";
 const HANS_META_FILENAME = "meta.json";
+const WS_MAGIC_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 const CHINESE_GEMINI_RULE_BLOCK = `# 全局语言偏好
 
@@ -61,6 +63,13 @@ function getHansMetaPath(): string {
 function isLoopbackHost(hostname: string): boolean {
   const lower = hostname.toLowerCase();
   return lower === "localhost" || lower === "127.0.0.1" || lower === "::1" || lower === "[::1]";
+}
+
+export function extractRemoteDebuggingPort(commandLine: string): number | null {
+  const match = /--remote-debugging-port=(\d{2,5})/i.exec(commandLine);
+  if (!match) return null;
+  const port = Number(match[1]);
+  return Number.isInteger(port) && port >= 1024 && port <= 65535 ? port : null;
 }
 
 export function isHansTargetPage(rawUrl: string, variant: AntigravityVariant): boolean {
@@ -126,7 +135,6 @@ export async function findFreeLoopbackPort(
       return candidate;
     }
   }
-  // Fall back to OS-assigned ephemeral loopback port
   return new Promise<number>((resolve, reject) => {
     const server = net.createServer();
     server.once("error", reject);
@@ -160,6 +168,10 @@ export async function allocateHansDebugPort(
 
 export function releaseHansDebugPort(profileId: string): void {
   reservedPorts.delete(profileId);
+}
+
+export function hasActiveHansMonitor(profileId: string): boolean {
+  return activeSessions.has(profileId);
 }
 
 export async function getAntigravityHansStatus(): Promise<AntigravityHansStatus> {
@@ -268,51 +280,127 @@ async function fetchCdpTargets(port: number): Promise<CdpTarget[] | null> {
   }
 }
 
-async function evaluateViaCdpWebSocket(wsUrl: string, expression: string): Promise<boolean> {
-  const WebSocketCtor = (globalThis as unknown as { WebSocket?: typeof WebSocket }).WebSocket;
-  if (!WebSocketCtor) {
-    return false;
+function encodeClientWsFrame(opcode: number, payload: Buffer): Buffer {
+  const mask = crypto.randomBytes(4);
+  let header: Buffer;
+  if (payload.length < 126) {
+    header = Buffer.alloc(2);
+    header[0] = 0x80 | opcode;
+    header[1] = 0x80 | payload.length;
+  } else if (payload.length < 65536) {
+    header = Buffer.alloc(4);
+    header[0] = 0x80 | opcode;
+    header[1] = 0x80 | 126;
+    header.writeUInt16BE(payload.length, 2);
+  } else {
+    header = Buffer.alloc(10);
+    header[0] = 0x80 | opcode;
+    header[1] = 0x80 | 127;
+    header.writeBigUInt64BE(BigInt(payload.length), 2);
   }
-  // Security guard: only allow loopback WebSocket connections
+  const masked = Buffer.allocUnsafe(payload.length);
+  for (let i = 0; i < payload.length; i += 1) {
+    masked[i] = payload[i] ^ mask[i & 3];
+  }
+  return Buffer.concat([header, mask, masked]);
+}
+
+/**
+ * Minimal zero-dependency RFC 6455 loopback WebSocket client for CDP Runtime.evaluate.
+ * Works across all Node.js / Electron versions (including Electron 34 / Node 20 without global WebSocket).
+ */
+export async function evaluateViaCdpWebSocket(
+  wsUrl: string,
+  expression: string
+): Promise<boolean> {
+  let parsed: URL;
   try {
-    const parsed = new URL(wsUrl);
-    if (!isLoopbackHost(parsed.hostname)) {
+    parsed = new URL(wsUrl);
+    if (parsed.protocol !== "ws:" || !isLoopbackHost(parsed.hostname)) {
       return false;
     }
   } catch {
     return false;
   }
 
+  const port = Number(parsed.port || 80);
+  const host = parsed.hostname.replace(/^\[|\]$/g, "");
+  const key = crypto.randomBytes(16).toString("base64");
+  const expectedAccept = crypto
+    .createHash("sha1")
+    .update(key + WS_MAGIC_GUID)
+    .digest("base64");
+
   return new Promise<boolean>((resolve) => {
     let settled = false;
-    const ws = new WebSocketCtor(wsUrl);
-    const timer = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        try {
-          ws.close();
-        } catch {
-          // ignore
-        }
-        resolve(false);
-      }
-    }, 5000);
+    let handshakeDone = false;
+    let buffer: Buffer = Buffer.alloc(0);
+    let fragmentedChunks: Buffer[] = [];
+    let fragmentedOpcode = 0;
+
+    const socket = net.connect(port, host);
+    const timer = setTimeout(() => finish(false), 6000);
 
     const finish = (ok: boolean) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       try {
-        ws.close();
+        socket.end();
+        socket.destroy();
       } catch {
         // ignore
       }
       resolve(ok);
     };
 
-    ws.addEventListener("open", () => {
+    const handleTextMessage = (text: string) => {
       try {
-        ws.send(
+        const msg = JSON.parse(text) as {
+          id?: number;
+          error?: unknown;
+          result?: { exceptionDetails?: unknown };
+        };
+        if (msg.id === 1) {
+          finish(!msg.error && !msg.result?.exceptionDetails);
+        }
+      } catch {
+        // ignore non-JSON or unrelated frames
+      }
+    };
+
+    socket.on("connect", () => {
+      const request = [
+        `GET ${parsed.pathname}${parsed.search} HTTP/1.1`,
+        `Host: ${parsed.host}`,
+        "Upgrade: websocket",
+        "Connection: Upgrade",
+        `Sec-WebSocket-Key: ${key}`,
+        "Sec-WebSocket-Version: 13",
+        "",
+        ""
+      ].join("\r\n");
+      socket.write(request);
+    });
+
+    socket.on("data", (chunk: Buffer) => {
+      if (settled) return;
+      buffer = Buffer.concat([buffer, chunk]);
+
+      if (!handshakeDone) {
+        const headerEnd = buffer.indexOf("\r\n\r\n");
+        if (headerEnd === -1) return;
+        const headerText = buffer.subarray(0, headerEnd).toString("utf8");
+        const statusLine = headerText.split("\r\n")[0] ?? "";
+        const acceptMatch = /sec-websocket-accept:\s*([^\r\n]+)/i.exec(headerText);
+        if (!statusLine.includes(" 101 ") || acceptMatch?.[1]?.trim() !== expectedAccept) {
+          finish(false);
+          return;
+        }
+        handshakeDone = true;
+        buffer = buffer.subarray(headerEnd + 4);
+
+        const payload = Buffer.from(
           JSON.stringify({
             id: 1,
             method: "Runtime.evaluate",
@@ -320,27 +408,78 @@ async function evaluateViaCdpWebSocket(wsUrl: string, expression: string): Promi
               expression,
               silent: true
             }
-          })
+          }),
+          "utf8"
         );
-      } catch {
-        finish(false);
+        socket.write(encodeClientWsFrame(0x1, payload));
       }
-    });
 
-    ws.addEventListener("message", (event) => {
-      try {
-        const raw = typeof event.data === "string" ? event.data : String(event.data);
-        const msg = JSON.parse(raw) as { id?: number; error?: unknown };
-        if (msg.id === 1) {
-          finish(!msg.error);
+      while (buffer.length >= 2 && !settled) {
+        const fin = (buffer[0] & 0x80) !== 0;
+        const opcode = buffer[0] & 0x0f;
+        const masked = (buffer[1] & 0x80) !== 0;
+        let payloadLen = buffer[1] & 0x7f;
+        let offset = 2;
+
+        if (payloadLen === 126) {
+          if (buffer.length < 4) return;
+          payloadLen = buffer.readUInt16BE(2);
+          offset = 4;
+        } else if (payloadLen === 127) {
+          if (buffer.length < 10) return;
+          payloadLen = Number(buffer.readBigUInt64BE(2));
+          offset = 10;
         }
-      } catch {
-        // ignore non-matching frames
+
+        const maskLen = masked ? 4 : 0;
+        if (buffer.length < offset + maskLen + payloadLen) return;
+
+        let payload = buffer.subarray(offset + maskLen, offset + maskLen + payloadLen);
+        if (masked) {
+          const maskKey = buffer.subarray(offset, offset + 4);
+          const unmasked = Buffer.allocUnsafe(payload.length);
+          for (let i = 0; i < payload.length; i += 1) {
+            unmasked[i] = payload[i] ^ maskKey[i & 3];
+          }
+          payload = unmasked;
+        }
+        buffer = buffer.subarray(offset + maskLen + payloadLen);
+
+        if (opcode === 0x8) {
+          finish(false);
+          return;
+        }
+        if (opcode === 0x9) {
+          socket.write(encodeClientWsFrame(0xa, payload));
+          continue;
+        }
+        if (opcode === 0xa) {
+          continue;
+        }
+        if (opcode === 0x1 || opcode === 0x2) {
+          if (fin) {
+            if (opcode === 0x1) {
+              handleTextMessage(payload.toString("utf8"));
+            }
+          } else {
+            fragmentedOpcode = opcode;
+            fragmentedChunks = [payload];
+          }
+        } else if (opcode === 0x0 && fragmentedOpcode !== 0) {
+          fragmentedChunks.push(payload);
+          if (fin) {
+            if (fragmentedOpcode === 0x1) {
+              handleTextMessage(Buffer.concat(fragmentedChunks).toString("utf8"));
+            }
+            fragmentedChunks = [];
+            fragmentedOpcode = 0;
+          }
+        }
       }
     });
 
-    ws.addEventListener("error", () => finish(false));
-    ws.addEventListener("close", () => finish(false));
+    socket.on("error", () => finish(false));
+    socket.on("close", () => finish(false));
   });
 }
 

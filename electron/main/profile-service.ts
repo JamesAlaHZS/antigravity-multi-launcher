@@ -28,6 +28,8 @@ import {
 import {
   allocateHansDebugPort,
   ensureChineseGeminiRules,
+  extractRemoteDebuggingPort,
+  hasActiveHansMonitor,
   releaseHansDebugPort,
   startProfileHansMonitor,
   stopProfileHansMonitor
@@ -218,7 +220,7 @@ export async function updateProfile(
 
 export async function openProfile(
   profileId: string,
-  options: { elevatedWorker?: boolean } = {}
+  options: { elevatedWorker?: boolean; remoteDebuggingPort?: number } = {}
 ): Promise<{ pid: number | null; focusedExisting?: boolean }> {
   const profile = await mustFindProfile(profileId);
   const log = await createLaunchLogger(profile);
@@ -310,18 +312,25 @@ export async function openProfile(
         );
       }
       if (settings.antigravityChineseUi && !runningPrimary) {
-        try {
-          hansDebugPort = await allocateHansDebugPort(
-            profile.id,
-            profile.antigravityVariant ?? "antigravity_app"
-          );
-          await log("allocated CDP remote debugging port for Chinese UI localization", {
+        if (options.remoteDebuggingPort) {
+          hansDebugPort = options.remoteDebuggingPort;
+          await log("using parent-allocated CDP port in elevated worker", {
             port: hansDebugPort
           });
-        } catch (portErr) {
-          await log("failed to allocate CDP port for Chinese UI localization", {
-            error: portErr instanceof Error ? portErr.message : String(portErr)
-          });
+        } else {
+          try {
+            hansDebugPort = await allocateHansDebugPort(
+              profile.id,
+              profile.antigravityVariant ?? "antigravity_app"
+            );
+            await log("allocated CDP remote debugging port for Chinese UI localization", {
+              port: hansDebugPort
+            });
+          } catch (portErr) {
+            await log("failed to allocate CDP port for Chinese UI localization", {
+              error: portErr instanceof Error ? portErr.message : String(portErr)
+            });
+          }
         }
       }
 
@@ -441,11 +450,26 @@ export async function openProfile(
         process.versions.electron &&
         !(process as NodeJS.Process & { defaultApp?: boolean }).defaultApp &&
         !options.elevatedWorker &&
-        await runAntigravityAsAdministrator(profile.id, { executablePath: launchSpec.command })
+        await runAntigravityAsAdministrator(profile.id, {
+          executablePath: launchSpec.command,
+          hansPort: hansDebugPort
+        })
       ) {
         const launchedProfile = await findProfile(profile.id);
         const pid = launchedProfile?.launch.lastKnownPid ?? null;
-        await log("Antigravity launched through Windows elevation", { pid });
+        await log("Antigravity launched through Windows elevation", { pid, hansDebugPort });
+        if (hansDebugPort) {
+          void startProfileHansMonitor(
+            profile.id,
+            hansDebugPort,
+            profile.antigravityVariant ?? "antigravity_app"
+          ).then((started) =>
+            log("Antigravity-Hans dynamic Chinese UI monitor status (elevated launch)", {
+              port: hansDebugPort,
+              started
+            })
+          );
+        }
         return { pid, focusedExisting: Boolean(runningPrimary) };
       }
       throw launchError;
@@ -458,6 +482,27 @@ export async function openProfile(
         await log("focused existing profile window", { ...focusRes });
       }
       await updateProfileLaunchMetadata(profile.id, runningPrimary.pid);
+      if (
+        profile.engine === "antigravity" &&
+        settings.antigravityChineseUi &&
+        !options.elevatedWorker &&
+        !hasActiveHansMonitor(profile.id) &&
+        runningPrimary.command
+      ) {
+        const existingPort = extractRemoteDebuggingPort(runningPrimary.command);
+        if (existingPort) {
+          void startProfileHansMonitor(
+            profile.id,
+            existingPort,
+            profile.antigravityVariant ?? "antigravity_app"
+          ).then((started) =>
+            log("Antigravity-Hans re-attached to existing profile window", {
+              port: existingPort,
+              started
+            })
+          );
+        }
+      }
       return { pid: runningPrimary.pid, focusedExisting: true };
     }
 

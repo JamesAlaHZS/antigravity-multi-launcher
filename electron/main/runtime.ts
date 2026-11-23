@@ -270,7 +270,7 @@ export async function inspectProfilesRuntime(
 
 export async function findRunningProfilePrimaryProcess(
   profile: ProfileRecord
-): Promise<{ pid: number; executablePath: string | null } | null> {
+): Promise<{ pid: number; executablePath: string | null; command?: string } | null> {
   try {
     const processes = await listSystemProcesses();
     const matched = processes.filter((row) =>
@@ -281,14 +281,17 @@ export async function findRunningProfilePrimaryProcess(
     );
     if (matched.length === 0) {
       const elevated = findTrackedElevatedProcess(processes, profile);
-      return elevated ? { pid: elevated.pid, executablePath: elevated.executablePath ?? null } : null;
+      return elevated
+        ? { pid: elevated.pid, executablePath: elevated.executablePath ?? null, command: elevated.command }
+        : null;
     }
     const primaryPid = selectPrimaryPid(matched);
     if (!primaryPid) return null;
     const primaryRow = matched.find((m) => m.pid === primaryPid) ?? matched[0];
     return {
       pid: primaryPid,
-      executablePath: primaryRow.executablePath ?? null
+      executablePath: primaryRow.executablePath ?? null,
+      command: primaryRow.command
     };
   } catch {
     return null;
