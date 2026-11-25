@@ -4,6 +4,7 @@ import type {
   LegacyCodexProfileCandidate,
   ProfileRecord
 } from "../../src/shared/types.js";
+import { normalizeProfileName } from "../../src/shared/profile-utils.js";
 import { pathExists, readJsonFile } from "./fs-utils.js";
 import { generateProfileLauncher } from "./launcher.js";
 import { getAppPaths, launcherFileName, resolveCodexApp } from "./paths.js";
@@ -125,16 +126,17 @@ export async function importLegacyCodexProfiles(
     if (!raw.paths?.codexHome || !raw.paths?.userDataDir) continue;
 
     const authMode = mapLegacyAuthMode(raw);
+    const normalizedName = normalizeProfileName(raw.name || raw.id, "codex");
     const resolvedCodex = resolveCodexApp(raw.paths.codexAppPath || settings.defaultCodexAppPath);
     const launcherPath = path.join(
       roots.launcherRoot,
-      launcherFileName(raw.name || raw.id, "codex")
+      launcherFileName(normalizedName, "codex")
     );
     const now = new Date().toISOString();
 
     const importedRecord: ProfileRecord = {
       id: raw.id,
-      name: raw.name || raw.id,
+      name: normalizedName,
       engine: "codex",
       status: raw.status === "deleted" ? "deleted" : "active",
       paths: {

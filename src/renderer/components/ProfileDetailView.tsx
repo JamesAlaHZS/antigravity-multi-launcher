@@ -24,6 +24,12 @@ import type {
   ReasoningEffort,
   RuntimeStatusItem
 } from "@shared/types";
+import {
+  getEnginePrefix,
+  getProfileAvatarLabel,
+  normalizeProfileName,
+  sortProfiles
+} from "@shared/profile-utils";
 import { AUTH_MODE_LABELS, COLOR_PALETTE, t } from "../i18n";
 
 interface ProfileDetailViewProps {
@@ -164,16 +170,20 @@ export const ProfileDetailView: React.FC<ProfileDetailViewProps> = ({
   const needsApiKey = authMode !== "google_account" && authMode !== "chatgpt_account";
   const needsBaseUrl = authMode === "custom_gateway" || authMode === "third_party_responses";
 
-  const peerProfiles = allProfiles.filter(
-    (p) => p.engine === profile.engine && p.id !== profile.id && p.status === "active"
+  const peerProfiles = sortProfiles(
+    allProfiles.filter(
+      (p) => p.engine === profile.engine && p.id !== profile.id && p.status === "active"
+    )
   );
+  const expectedPrefix = getEnginePrefix(profile.engine);
+  const normalizedNamePreview = normalizeProfileName(name, profile.engine);
 
   async function handleSave() {
     setSaving(true);
     try {
-      await window.multiLauncher.updateProfile({
+      const res = await window.multiLauncher.updateProfile({
         profileId: profile.id,
-        name,
+        name: normalizedNamePreview || name,
         appPath,
         authMode,
         provider: {
@@ -190,6 +200,7 @@ export const ProfileDetailView: React.FC<ProfileDetailViewProps> = ({
           iconBackgroundColor: iconColor
         }
       });
+      setName(res.profile.name);
       setApiKey("");
       onUpdated();
       onNotify(t(lang, "配置已保存并更新启动器", "Profile saved"));
@@ -317,7 +328,7 @@ export const ProfileDetailView: React.FC<ProfileDetailViewProps> = ({
               boxShadow: "var(--shadow-md)"
             }}
           >
-            {profile.name.slice(0, 1).toUpperCase()}
+            {getProfileAvatarLabel(profile)}
           </div>
           <div>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -356,6 +367,7 @@ export const ProfileDetailView: React.FC<ProfileDetailViewProps> = ({
             className="btn"
             onClick={async () => {
               const res = await window.multiLauncher.generateLauncher(profile.id);
+              onUpdated();
               onNotify(`${t(lang, "快捷启动器已生成：", "Launcher updated: ")}${res.launcherPath}`);
             }}
           >
@@ -421,6 +433,19 @@ export const ProfileDetailView: React.FC<ProfileDetailViewProps> = ({
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                 />
+                <div className="field-hint">
+                  {name.trim() && normalizedNamePreview !== name.trim()
+                    ? t(
+                        lang,
+                        `保存后将自动规范为：${normalizedNamePreview}`,
+                        `Will be normalized to: ${normalizedNamePreview}`
+                      )
+                    : t(
+                        lang,
+                        `${profile.engine === "antigravity" ? "Antigravity" : "Codex"} 配置自动保持 ${expectedPrefix} 前缀`,
+                        `${profile.engine === "antigravity" ? "Antigravity" : "Codex"} profiles automatically keep the ${expectedPrefix} prefix`
+                      )}
+                </div>
               </div>
               <div className="field-group">
                 <label className="field-label">{t(lang, "标识颜色", "Color")}</label>

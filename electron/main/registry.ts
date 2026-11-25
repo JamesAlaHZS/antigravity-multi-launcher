@@ -6,6 +6,7 @@ import type {
   ProfileRecord,
   UpdateProfileInput
 } from "../../src/shared/types.js";
+import { normalizeProfileName, sortProfiles } from "../../src/shared/profile-utils.js";
 import { ensureDir, readJsonFile, writeJsonFile } from "./fs-utils.js";
 import {
   getAppPaths,
@@ -96,10 +97,33 @@ export async function saveRegistry(store: RegistryStore): Promise<void> {
   await writeJsonFile(profilesFile, store);
 }
 
+function organizeProfiles(profiles: ProfileRecord[]): {
+  profiles: ProfileRecord[];
+  changed: boolean;
+} {
+  const normalized = profiles.map(normalizeProfile);
+  const sorted = sortProfiles(normalized);
+  const changed =
+    sorted.length !== profiles.length ||
+    sorted.some((item, idx) => {
+      const orig = profiles[idx];
+      return (
+        !orig ||
+        orig.id !== item.id ||
+        orig.name !== item.name ||
+        orig.appearance?.iconBackgroundColor !== item.appearance.iconBackgroundColor
+      );
+    });
+  return { profiles: sorted, changed };
+}
+
 export async function listProfiles(includeDeleted = false): Promise<ProfileRecord[]> {
   const store = await loadRegistry();
-  const normalized = store.profiles.map(normalizeProfile);
-  return includeDeleted ? normalized : normalized.filter((p) => p.status !== "deleted");
+  const { profiles: organized, changed } = organizeProfiles(store.profiles);
+  if (changed && store.profiles.length > 0) {
+    await saveRegistry({ ...store, profiles: organized });
+  }
+  return includeDeleted ? organized : organized.filter((p) => p.status !== "deleted");
 }
 
 export async function findProfile(profileId: string): Promise<ProfileRecord | null> {
@@ -113,7 +137,8 @@ export async function createProfileRecord(input: CreateProfileInput): Promise<Pr
   const roots = await getEffectiveStorageRoots();
   const store = await loadRegistry();
 
-  const baseSlug = slugifyProfileName(input.name);
+  const normalizedName = normalizeProfileName(input.name, input.engine);
+  const baseSlug = slugifyProfileName(normalizedName);
   const existingIds = new Set(store.profiles.map((p) => p.id));
   let id = baseSlug;
   let counter = 2;
@@ -140,7 +165,7 @@ export async function createProfileRecord(input: CreateProfileInput): Promise<Pr
       : undefined;
 
   const launcherDir = input.launcherDirectory?.trim() || roots.launcherRoot;
-  const launcherPath = path.join(launcherDir, launcherFileName(input.name, input.engine));
+  const launcherPath = path.join(launcherDir, launcherFileName(normalizedName, input.engine));
 
   const resolvedApp = isAntigravity
     ? resolveAntigravityApp(
@@ -169,7 +194,7 @@ export async function createProfileRecord(input: CreateProfileInput): Promise<Pr
 
   const profile: ProfileRecord = {
     id,
-    name: input.name.trim(),
+    name: normalizedName,
     engine: input.engine,
     ...(variant ? { antigravityVariant: variant } : {}),
     status: "active",
@@ -226,7 +251,7 @@ export async function createProfileRecord(input: CreateProfileInput): Promise<Pr
     ...(extensionsDir ? [ensureDir(extensionsDir)] : [])
   ]);
 
-  store.profiles.push(profile);
+  store.profiles = organizeProfiles([...store.profiles, profile]).profiles;
   await saveRegistry(store);
   return profile;
 }
@@ -248,20 +273,23 @@ export async function updateProfilePathsRecord(
     profile.launch.lastKnownUserDataDir = newPaths.userDataDir;
   }
   profile.timestamps.updatedAt = new Date().toISOString();
+  store.profiles = organizeProfiles(store.profiles).profiles;
   await saveRegistry(store);
   return normalizeProfile(profile);
 }
 
 export async function insertImportedProfileRecord(profile: ProfileRecord): Promise<ProfileRecord> {
   const store = await loadRegistry();
-  const existingIdx = store.profiles.findIndex((p) => p.id === profile.id);
+  const normalized = normalizeProfile(profile);
+  const existingIdx = store.profiles.findIndex((p) => p.id === normalized.id);
   if (existingIdx >= 0) {
-    store.profiles[existingIdx] = profile;
+    store.profiles[existingIdx] = normalized;
   } else {
-    store.profiles.push(profile);
+    store.profiles.push(normalized);
   }
+  store.profiles = organizeProfiles(store.profiles).profiles;
   await saveRegistry(store);
-  return profile;
+  return normalized;
 }
 
 export async function updateProfileRecord(input: UpdateProfileInput): Promise<ProfileRecord> {
@@ -272,7 +300,14 @@ export async function updateProfileRecord(input: UpdateProfileInput): Promise<Pr
   }
 
   if (input.name?.trim()) {
-    profile.name = input.name.trim();
+    const nextName = normalizeProfileName(input.name, profile.engine);
+    profile.name = nextName;
+    const launcherDir = profile.paths.launcherPath
+      ? path.dirname(profile.paths.launcherPath)
+      : (await getEffectiveStorageRoots()).launcherRoot;
+    profile.paths.launcherPath = path.join(launcherDir, launcherFileName(nextName, profile.engine));
+  } else {
+    profile.name = normalizeProfileName(profile.name, profile.engine) || profile.name;
   }
   if (input.appPath?.trim()) {
     profile.paths.appPath = input.appPath.trim();
@@ -325,6 +360,7 @@ export async function updateProfileRecord(input: UpdateProfileInput): Promise<Pr
   }
 
   profile.timestamps.updatedAt = new Date().toISOString();
+  store.profiles = organizeProfiles(store.profiles).profiles;
   await saveRegistry(store);
   return normalizeProfile(profile);
 }
@@ -349,6 +385,7 @@ export async function softDeleteProfileRecord(profileId: string): Promise<void> 
   if (!profile) throw new Error(`Profile not found: ${profileId}`);
   profile.status = "deleted";
   profile.timestamps.updatedAt = new Date().toISOString();
+  store.profiles = organizeProfiles(store.profiles).profiles;
   await saveRegistry(store);
 }
 
@@ -358,6 +395,7 @@ export async function restoreProfileRecord(profileId: string): Promise<void> {
   if (!profile) throw new Error(`Profile not found: ${profileId}`);
   profile.status = "active";
   profile.timestamps.updatedAt = new Date().toISOString();
+  store.profiles = organizeProfiles(store.profiles).profiles;
   await saveRegistry(store);
 }
 
@@ -365,15 +403,17 @@ export async function removeProfileRecord(profileId: string): Promise<ProfileRec
   const store = await loadRegistry();
   const profile = store.profiles.find((p) => p.id === profileId);
   if (!profile) throw new Error(`Profile not found: ${profileId}`);
-  store.profiles = store.profiles.filter((p) => p.id !== profileId);
+  store.profiles = organizeProfiles(store.profiles.filter((p) => p.id !== profileId)).profiles;
   await saveRegistry(store);
   return normalizeProfile(profile);
 }
 
 function normalizeProfile(profile: ProfileRecord): ProfileRecord {
   const fallbackColor = DEFAULT_ICON_COLORS[profile.engine] ?? "#4F46E5";
+  const normalizedName = normalizeProfileName(profile.name, profile.engine) || profile.name;
   return {
     ...profile,
+    name: normalizedName,
     appearance: {
       ...profile.appearance,
       iconBackgroundColor: normalizeHexColor(profile.appearance?.iconBackgroundColor, fallbackColor)

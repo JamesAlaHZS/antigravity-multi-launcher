@@ -13,6 +13,7 @@ import type {
   ProfileRecord,
   RuntimeStatusItem
 } from "@shared/types";
+import { sortProfiles } from "@shared/profile-utils";
 import { AUTH_MODE_LABELS, t } from "../i18n";
 
 interface SidebarProps {
@@ -48,11 +49,65 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenSettings,
   onOpenLegacyImport
 }) => {
-  const filteredProfiles = profiles.filter((p) => {
-    if (!showDeleted && p.status === "deleted") return false;
-    if (engineFilter !== "all" && p.engine !== engineFilter) return false;
-    return true;
-  });
+  const filteredProfiles = sortProfiles(
+    profiles.filter((p) => {
+      if (!showDeleted && p.status === "deleted") return false;
+      if (engineFilter !== "all" && p.engine !== engineFilter) return false;
+      return true;
+    })
+  );
+
+  const antigravityProfiles = filteredProfiles.filter((p) => p.engine === "antigravity");
+  const codexProfiles = filteredProfiles.filter((p) => p.engine === "codex");
+
+  const renderProfileCard = (profile: ProfileRecord) => {
+    const rt = runtimeMap.get(profile.id);
+    const isRunning = rt?.status === "running";
+    const badgeText =
+      profile.engine === "antigravity"
+        ? profile.antigravityVariant === "antigravity_ide"
+          ? "AGY IDE"
+          : "AGY 2.0"
+        : "Codex";
+    return (
+      <button
+        key={profile.id}
+        className={`profile-card-item ${
+          selectedView === profile.id ? "selected" : ""
+        } ${profile.status === "deleted" ? "deleted" : ""}`}
+        onClick={() => onSelectView(profile.id)}
+      >
+        <div className="profile-card-top">
+          <div className="profile-name-wrap">
+            <span
+              className="profile-color-dot"
+              style={{ backgroundColor: profile.appearance.iconBackgroundColor }}
+            />
+            <span className="profile-item-name" title={profile.name}>
+              {profile.name}
+            </span>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            {isRunning && <span className="running-dot" title={`PID ${rt?.pid}`} />}
+            {profile.useDefaultHome && (
+              <span
+                className="status-chip pass"
+                style={{ fontSize: 10, padding: "1px 6px" }}
+              >
+                {t(lang, "主窗口", "Native")}
+              </span>
+            )}
+            <span className={`engine-badge ${profile.engine}`}>{badgeText}</span>
+          </div>
+        </div>
+        <div className="profile-item-sub">
+          <span>{AUTH_MODE_LABELS[lang][profile.auth.mode]}</span>
+          <span>·</span>
+          <span>{profile.provider.model}</span>
+        </div>
+      </button>
+    );
+  };
 
   return (
     <aside className="sidebar">
@@ -138,53 +193,37 @@ export const Sidebar: React.FC<SidebarProps> = ({
               "No profiles yet. Click + to create one."
             )}
           </div>
+        ) : engineFilter === "all" ? (
+          <>
+            {antigravityProfiles.length > 0 && (
+              <div className="profile-group">
+                <div className="profile-group-header">
+                  <div className="profile-group-title">
+                    <span className="profile-group-dot antigravity" />
+                    <span>Antigravity</span>
+                    <span className="profile-group-prefix antigravity">anti-</span>
+                  </div>
+                  <span className="count-pill">{antigravityProfiles.length}</span>
+                </div>
+                {antigravityProfiles.map(renderProfileCard)}
+              </div>
+            )}
+            {codexProfiles.length > 0 && (
+              <div className="profile-group">
+                <div className="profile-group-header">
+                  <div className="profile-group-title">
+                    <span className="profile-group-dot codex" />
+                    <span>Codex</span>
+                    <span className="profile-group-prefix codex">cx-</span>
+                  </div>
+                  <span className="count-pill">{codexProfiles.length}</span>
+                </div>
+                {codexProfiles.map(renderProfileCard)}
+              </div>
+            )}
+          </>
         ) : (
-          filteredProfiles.map((profile) => {
-            const rt = runtimeMap.get(profile.id);
-            const isRunning = rt?.status === "running";
-            const badgeText =
-              profile.engine === "antigravity"
-                ? profile.antigravityVariant === "antigravity_ide"
-                  ? "AGY IDE"
-                  : "AGY 2.0"
-                : "Codex";
-            return (
-              <button
-                key={profile.id}
-                className={`profile-card-item ${
-                  selectedView === profile.id ? "selected" : ""
-                } ${profile.status === "deleted" ? "deleted" : ""}`}
-                onClick={() => onSelectView(profile.id)}
-              >
-                <div className="profile-card-top">
-                  <div className="profile-name-wrap">
-                    <span
-                      className="profile-color-dot"
-                      style={{ backgroundColor: profile.appearance.iconBackgroundColor }}
-                    />
-                    <span className="profile-item-name">{profile.name}</span>
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    {isRunning && <span className="running-dot" title={`PID ${rt?.pid}`} />}
-                    {profile.useDefaultHome && (
-                      <span
-                        className="status-chip pass"
-                        style={{ fontSize: 10, padding: "1px 6px" }}
-                      >
-                        {t(lang, "主窗口", "Native")}
-                      </span>
-                    )}
-                    <span className={`engine-badge ${profile.engine}`}>{badgeText}</span>
-                  </div>
-                </div>
-                <div className="profile-item-sub">
-                  <span>{AUTH_MODE_LABELS[lang][profile.auth.mode]}</span>
-                  <span>·</span>
-                  <span>{profile.provider.model}</span>
-                </div>
-              </button>
-            );
-          })
+          filteredProfiles.map(renderProfileCard)
         )}
       </div>
 

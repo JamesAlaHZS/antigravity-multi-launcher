@@ -54,6 +54,7 @@ import {
   getRuntimePlatform,
   isWindowsAppsPath,
   isWindowsCodexGuiExecutable,
+  launcherFileName,
   resolveAntigravityApp,
   resolveCodexApp
 } from "./paths.js";
@@ -192,9 +193,50 @@ async function resolveCodexSourceHome(
   return getDefaultCodexHome();
 }
 
+async function removeStaleLauncherIfMoved(
+  previousLauncherPath: string | undefined,
+  nextLauncherPath: string
+): Promise<void> {
+  if (!previousLauncherPath) return;
+  const prevResolved = path.resolve(previousLauncherPath);
+  const nextResolved = path.resolve(nextLauncherPath);
+  if (prevResolved.toLowerCase() === nextResolved.toLowerCase()) return;
+  if (path.dirname(prevResolved).toLowerCase() !== path.dirname(nextResolved).toLowerCase()) {
+    return;
+  }
+  await fs.rm(prevResolved, { recursive: true, force: true }).catch(() => undefined);
+}
+
+export async function rebuildProfileLauncher(
+  profileId: string
+): Promise<{ launcherPath: string; executablePath: string }> {
+  let profile = await mustFindProfile(profileId);
+  const previousLauncherPath = profile.paths.launcherPath;
+  const launcherDir = previousLauncherPath
+    ? path.dirname(previousLauncherPath)
+    : (await getEffectiveStorageRoots()).launcherRoot;
+  const desiredLauncherPath = path.join(
+    launcherDir,
+    launcherFileName(profile.name, profile.engine)
+  );
+  if (
+    !previousLauncherPath ||
+    path.resolve(previousLauncherPath).toLowerCase() !==
+      path.resolve(desiredLauncherPath).toLowerCase()
+  ) {
+    profile = await updateProfilePathsRecord(profile.id, {
+      launcherPath: desiredLauncherPath
+    });
+  }
+  const generated = await generateProfileLauncher(profile);
+  await removeStaleLauncherIfMoved(previousLauncherPath, generated.launcherPath);
+  return generated;
+}
+
 export async function updateProfile(
   input: UpdateProfileInput
 ): Promise<{ profile: ProfileRecord; launcherPath: string }> {
+  const previousLauncherPath = (await findProfile(input.profileId))?.paths.launcherPath;
   const profile = await updateProfileRecord(input);
 
   if (requiresSecretApiKey(profile) && input.provider.apiKey?.trim()) {
@@ -212,6 +254,7 @@ export async function updateProfile(
   }
 
   const launcher = await generateProfileLauncher(profile);
+  await removeStaleLauncherIfMoved(previousLauncherPath, launcher.launcherPath);
   return {
     profile,
     launcherPath: launcher.launcherPath

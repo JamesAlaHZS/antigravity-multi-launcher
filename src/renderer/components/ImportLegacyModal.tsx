@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Download, X } from "lucide-react";
 import type { LanguageCode, LegacyCodexProfileCandidate } from "@shared/types";
+import { normalizeProfileName } from "@shared/profile-utils";
 import { AUTH_MODE_LABELS, t } from "../i18n";
 
 interface ImportLegacyModalProps {
@@ -81,7 +82,7 @@ export const ImportLegacyModal: React.FC<ImportLegacyModalProps> = ({
                       }}
                     >
                       <span>
-                        {item.name} ({item.id})
+                        {normalizeProfileName(item.name, "codex")} ({item.id})
                       </span>
                       {item.legacyStatus === "deleted" && (
                         <span className="status-chip warn">

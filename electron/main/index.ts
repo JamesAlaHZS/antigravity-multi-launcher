@@ -4,7 +4,6 @@ import { fileURLToPath } from "node:url";
 import type { EngineType } from "../../src/shared/types.js";
 import { buildSanitizedDiagnosticsReport } from "./diagnostics.js";
 import { getEnvironmentReport } from "./environment.js";
-import { generateProfileLauncher } from "./launcher.js";
 import {
   detectLegacyCodexProfiles,
   importLegacyCodexProfiles
@@ -20,6 +19,7 @@ import {
   openProfile,
   permanentlyDeleteProfile,
   readProfileLaunchLog,
+  rebuildProfileLauncher,
   restoreProfile,
   restoreProfileBackup,
   softDeleteProfile,
@@ -185,11 +185,7 @@ function registerIpcHandlers(): void {
   ipcMain.handle("profiles:delete-permanently", (_e, id: string) => permanentlyDeleteProfile(id));
   ipcMain.handle("profiles:open", (_e, id: string) => openProfile(id));
   ipcMain.handle("profiles:stop", (_e, id: string) => stopProfile(id));
-  ipcMain.handle("profiles:generate-launcher", async (_e, id: string) => {
-    const profile = await findProfile(id);
-    if (!profile) throw new Error(`Profile not found: ${id}`);
-    return generateProfileLauncher(profile);
-  });
+  ipcMain.handle("profiles:generate-launcher", (_e, id: string) => rebuildProfileLauncher(id));
   ipcMain.handle(
     "profiles:migrate-storage",
     (_e, input: { profileId: string; targetRoot?: string }) =>

@@ -73,9 +73,10 @@ describe("Antigravity Multi-Instance Isolation Engine", () => {
       }
     });
 
-    expect(profile.id).toBe("work-account-a");
-    expect(profile.credentialScope).toBe("agy-profile-work-account-a");
-    expect(launcherPath).toContain("[AGY] Work Account A.cmd");
+    expect(profile.name).toBe("anti-Work Account A");
+    expect(profile.id).toBe("anti-work-account-a");
+    expect(profile.credentialScope).toBe("agy-profile-anti-work-account-a");
+    expect(launcherPath).toContain("anti-Work Account A.cmd");
 
     // Inherited MCP config, skill, gitconfig, and conversation must exist inside isolated profileHome
     const inheritedMcp = path.join(
@@ -116,7 +117,7 @@ describe("Antigravity Multi-Instance Isolation Engine", () => {
     expect(spec.args).toContain("--wsl-distro=Ubuntu-24.04");
     expect(spec.env.USERPROFILE).toBe(profile.paths.profileHome);
     expect(spec.env.HOME).toBe(profile.paths.profileHome);
-    expect(spec.env.ANTIGRAVITY_CREDENTIAL_SCOPE).toBe("agy-profile-work-account-a");
+    expect(spec.env.ANTIGRAVITY_CREDENTIAL_SCOPE).toBe("agy-profile-anti-work-account-a");
     expect(spec.env.SSH_CONNECTION).toBe("127.0.0.1 0 127.0.0.1 22");
     expect(spec.env.APPDATA).toBe(path.join(tempHome, "AppData", "Roaming"));
   });

@@ -23,6 +23,12 @@ import type {
   ProviderTestResult,
   ReasoningEffort
 } from "@shared/types";
+import {
+  getEnginePrefix,
+  normalizeProfileName,
+  sortProfiles,
+  switchEnginePrefix
+} from "@shared/profile-utils";
 import { AUTH_MODE_LABELS, COLOR_PALETTE, t } from "../i18n";
 
 interface CreateProfileModalProps {
@@ -50,7 +56,7 @@ export const CreateProfileModal: React.FC<CreateProfileModalProps> = ({
   const [engine, setEngine] = useState<EngineType>(initialEngine);
   const [variant, setVariant] = useState<AntigravityVariant>("antigravity_app");
   const [name, setName] = useState<string>(
-    initialEngine === "antigravity" ? "Antigravity Work" : "Codex Work"
+    initialEngine === "antigravity" ? "anti-Work" : "cx-Work"
   );
   const [iconColor, setIconColor] = useState<string>(
     initialEngine === "antigravity" ? "#4F46E5" : "#10B981"
@@ -91,21 +97,27 @@ export const CreateProfileModal: React.FC<CreateProfileModalProps> = ({
       setProviderName("Google Antigravity");
       setModel("gemini-2.5-pro");
       setIconColor("#4F46E5");
-      if (name === "Codex Work") setName("Antigravity Work");
+      setName((prev) =>
+        prev === "Codex Work" ? "anti-Work" : switchEnginePrefix(prev, "antigravity")
+      );
     } else {
       setAuthMode("chatgpt_account");
       setProviderName("OpenAI");
       setModel("gpt-5.2");
       setIconColor("#10B981");
-      if (name === "Antigravity Work") setName("Codex Work");
+      setName((prev) =>
+        prev === "Antigravity Work" ? "cx-Work" : switchEnginePrefix(prev, "codex")
+      );
     }
     setTestResult(null);
     setFetchedModels([]);
   }, [engine]);
 
-  const sameEngineProfiles = existingProfiles.filter(
-    (p) => p.engine === engine && p.status === "active"
+  const sameEngineProfiles = sortProfiles(
+    existingProfiles.filter((p) => p.engine === engine && p.status === "active")
   );
+  const expectedPrefix = getEnginePrefix(engine);
+  const normalizedName = normalizeProfileName(name, engine);
 
   const needsApiKey = authMode !== "google_account" && authMode !== "chatgpt_account";
   const needsBaseUrl = authMode === "custom_gateway" || authMode === "third_party_responses";
@@ -160,7 +172,7 @@ export const CreateProfileModal: React.FC<CreateProfileModalProps> = ({
     setSubmitting(true);
     try {
       const payload: CreateProfileInput = {
-        name: name.trim(),
+        name: normalizedName || name.trim(),
         engine,
         ...(engine === "antigravity"
           ? {
@@ -214,7 +226,7 @@ export const CreateProfileModal: React.FC<CreateProfileModalProps> = ({
   ];
 
   const previewSlug =
-    name
+    (normalizedName || name)
       .trim()
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
@@ -338,8 +350,25 @@ export const CreateProfileModal: React.FC<CreateProfileModalProps> = ({
                     className="text-input"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="例如：工作号 / 个人号 / Gemini 网关"
+                    placeholder={
+                      engine === "antigravity"
+                        ? t(lang, "例如：anti-工作号 / anti-ALA", "e.g. anti-Work")
+                        : t(lang, "例如：cx-yun / cx-工作号", "e.g. cx-Work")
+                    }
                   />
+                  <div className="field-hint">
+                    {name.trim() && normalizedName !== name.trim()
+                      ? t(
+                          lang,
+                          `创建时将自动规范为：${normalizedName}`,
+                          `Will be normalized to: ${normalizedName}`
+                        )
+                      : t(
+                          lang,
+                          `${engine === "antigravity" ? "Antigravity" : "Codex"} 配置统一使用 ${expectedPrefix} 前缀`,
+                          `${engine === "antigravity" ? "Antigravity" : "Codex"} profiles automatically use the ${expectedPrefix} prefix`
+                        )}
+                  </div>
                 </div>
                 <div className="field-group">
                   <label className="field-label">
@@ -787,7 +816,7 @@ export const CreateProfileModal: React.FC<CreateProfileModalProps> = ({
                     className="profile-color-dot"
                     style={{ width: 14, height: 14, backgroundColor: iconColor }}
                   />
-                  <strong style={{ fontSize: 16 }}>{name}</strong>
+                  <strong style={{ fontSize: 16 }}>{normalizedName || name}</strong>
                   <span className={`engine-badge ${engine}`}>
                     {engine === "antigravity"
                       ? variant === "antigravity_ide"

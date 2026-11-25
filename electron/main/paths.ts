@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { AntigravityVariant, EngineType } from "../../src/shared/types.js";
+import { normalizeProfileName } from "../../src/shared/profile-utils.js";
 import { fileExistsSync } from "./fs-utils.js";
 
 export const APP_NAME = "Antigravity Multi Launcher";
@@ -160,11 +161,10 @@ export function slugifyProfileName(name: string): string {
 }
 
 export function launcherFileName(profileName: string, engine: EngineType): string {
-  const safeName = profileName.replace(/[<>:"/\\|?*\x00-\x1F]/g, "_").trim() || "Profile";
-  const prefix = engine === "antigravity" ? "[AGY] " : "[Codex] ";
-  return getRuntimePlatform() === "win32"
-    ? `${prefix}${safeName}.cmd`
-    : `${prefix}${safeName}.app`;
+  const normalizedName = normalizeProfileName(profileName, engine);
+  const fallbackName = engine === "antigravity" ? "anti-Profile" : "cx-Profile";
+  const safeName = normalizedName.replace(/[<>:"/\\|?*\x00-\x1F]/g, "_").trim() || fallbackName;
+  return getRuntimePlatform() === "win32" ? `${safeName}.cmd` : `${safeName}.app`;
 }
 
 export interface ResolvedAppBinary {

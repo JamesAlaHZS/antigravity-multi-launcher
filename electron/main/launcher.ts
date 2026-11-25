@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ProfileRecord } from "../../src/shared/types.js";
+import { normalizeProfileName } from "../../src/shared/profile-utils.js";
 import { ensureDir } from "./fs-utils.js";
 import { APP_NAME, getRuntimePlatform } from "./paths.js";
 
@@ -29,8 +30,12 @@ function managerLaunchCommand(): { executablePath: string; args: string[] } {
   };
 }
 
+function escapeXml(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 function macInfoPlist(profile: ProfileRecord): string {
-  const displayName = `[${profile.engine === "antigravity" ? "AGY" : "Codex"}] ${profile.name}`;
+  const displayName = escapeXml(normalizeProfileName(profile.name, profile.engine) || profile.name);
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

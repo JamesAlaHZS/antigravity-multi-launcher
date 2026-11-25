@@ -45,6 +45,9 @@ describe("Codex Isolation & Legacy Profile Import", () => {
       }
     });
 
+    expect(profile.name).toBe("cx-Su8 Proxy");
+    expect(profile.id).toBe("cx-su8-proxy");
+
     const toml = await fs.readFile(path.join(profile.paths.profileHome, "config.toml"), "utf8");
     expect(toml).toContain('model_provider = "proxy"');
     expect(toml).toContain('base_url = "https://relay.example.com/v1"');
@@ -108,7 +111,9 @@ describe("Codex Isolation & Legacy Profile Import", () => {
     expect(imported.importedCount).toBe(1);
 
     const all = await listProfiles();
-    expect(all.some((p) => p.id === "james" && p.paths.profileHome === legacyHome)).toBe(true);
+    expect(
+      all.some((p) => p.id === "james" && p.name === "cx-James Main" && p.paths.profileHome === legacyHome)
+    ).toBe(true);
     expect(await getProfileSecret("james")).toBe("sk-legacy-imported");
 
     // Migrate storage to custom target drive folder and verify old directory is cleaned up

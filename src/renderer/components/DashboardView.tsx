@@ -19,6 +19,7 @@ import type {
   ProfileRecord,
   RuntimeStatusItem
 } from "@shared/types";
+import { sortProfiles } from "@shared/profile-utils";
 import { AUTH_MODE_LABELS, t } from "../i18n";
 
 interface DashboardViewProps {
@@ -56,7 +57,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onRevealPath,
   onOpenLegacyImport
 }) => {
-  const activeProfiles = profiles.filter((p) => p.status === "active");
+  const activeProfiles = sortProfiles(profiles.filter((p) => p.status === "active"));
   const agyCount = activeProfiles.filter((p) => p.engine === "antigravity").length;
   const codexCount = activeProfiles.filter((p) => p.engine === "codex").length;
   const runningProfiles = activeProfiles.filter(
